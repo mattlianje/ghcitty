@@ -36,10 +36,35 @@
 - Auto-reload on file changes
 - Vi mode
 
+## Tour
+
+#### Auto-multiline with navigation
+Multiline is auto-detected. Up/Down to move between lines, blank line to submit.
+
+`:{` `:}` blocks also work as per the usual, with in-buffer navigation.
+
+<img src="demos/auto-multiline-nav.gif" width="600">
+
+
+#### Hoogle
+`:hoogle` to search by name or type, `:doc` for Haddock docs.
+
+<img src="demos/hoogle.gif" width="600">
+
+#### Vi mode and $EDITOR
+Vi keybindings. `Ctrl+G` opens `$EDITOR`, evals on save.
+
+<img src="demos/vi-mode.gif" width="600">
+
+#### Auto-reload
+Edit a loaded file and ghcitty picks up the changes automatically without `:r`
+
+<img src="demos/auto-reload.gif" width="600">
+
 ## Install
 
 ### Prerequisites
-You just need a GHC and Rust installed
+You just need a [GHC](https://www.haskell.org/ghcup/install/) and [Rust](https://rust-lang.org/tools/install/) installed
 
 ### Build & install
 
@@ -61,17 +86,7 @@ ghcitty
 nix profile install github:mattlianje/ghcitty
 ```
 
-## Usage
-
-```
-ghcitty                           Interactive REPL
-ghcitty eval "map (+1) [1,2,3]"   One-shot eval
-ghcitty --json eval "1 + 1"       JSON output
-ghcitty --session work            Named session
-ghcitty --continue                Restore last session
-```
-
-## Cabal / Stack
+### Cabal / Stack
 
 `ghcitty` wraps `ghci`, so run it through your build tool to pick up project dependencies
 (same as `cabal repl`)
@@ -81,9 +96,15 @@ cabal exec -- ghcitty
 stack exec -- ghcitty
 ```
 
-## Of note
+## Usage
 
-At the end of the day, ghcitty is just a modest GHCi frontend w/ a tiny memory footprint to give some niceties to an already formidable, fun and proven REPL.
+```
+ghcitty                           Interactive REPL
+ghcitty eval "map (+1) [1,2,3]"   One-shot eval
+ghcitty --json eval "1 + 1"       JSON output
+ghcitty --session work            Named session
+ghcitty --continue                Restore last session
+```
 
 ## Commands
 
@@ -104,6 +125,10 @@ All GHCi `:` commands pass through. Extras:
 pretty_errors = true   # structured error display (default: true)
 show_timing = true     # show eval timing (default: false)
 ```
+
+## Of note
+
+At the end of the day, ghcitty is just a modest GHCi frontend w/ a tiny memory footprint to give some niceties to an already formidable, fun and proven REPL.
 
 ## FAQ
 
@@ -133,28 +158,3 @@ It tries the local `hoogle` CLI first, falls back to web API...
 
 **How do sessions work?**<br>
 Every eval is appended to `~/.local/share/ghcitty/<session>.hs`. `--continue` replays on startup.
-
-## Tour
-
-#### Auto-multiline with navigation
-Multiline is auto-detected. Up/Down to move between lines, blank line to submit.
-
-`:{` `:}` blocks also work as per the usual, with in-buffer navigation.
-
-<img src="demos/auto-multiline-nav.gif" width="600">
-
-
-#### Hoogle
-`:hoogle` to search by name or type, `:doc` for Haddock docs.
-
-<img src="demos/hoogle.gif" width="600">
-
-#### Vi mode and $EDITOR
-Vi keybindings. `Ctrl+G` opens `$EDITOR`, evals on save.
-
-<img src="demos/vi-mode.gif" width="600">
-
-#### Auto-reload
-Edit a loaded file and ghcitty picks up the changes automatically without `:r`
-
-<img src="demos/auto-reload.gif" width="600">

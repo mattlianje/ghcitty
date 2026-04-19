@@ -1,138 +1,162 @@
+use std::fmt::Write;
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::highlight::{self, color::*};
+use crate::highlight;
 use crate::parse::{self, Diagnostic, EvalResult};
+use crate::style;
 
 const MAX_OUTPUT_LINES: usize = 20;
 const MAX_OUTPUT_CHARS: usize = 3000;
 
 pub fn render(result: &EvalResult, config: &Config, elapsed: Option<Duration>) -> String {
-    let mut out = String::new();
-
     if !result.diagnostics.is_empty() {
-        for d in &result.diagnostics {
-            if config.pretty_errors {
-                out.push_str(&render_diagnostic_pretty(d));
-            } else {
-                out.push_str(&render_diagnostic_raw(d));
-            }
-        }
-        return out;
+        return render_diagnostics(&result.diagnostics, config);
     }
 
     if !result.value.is_empty() {
-        let is_io = result
-            .type_str
-            .as_ref()
-            .map(|t| t.starts_with("IO ") || t == "IO ()")
-            .unwrap_or(true);
-        if is_io {
-            out.push_str(&render_plain_truncated(&result.value));
-        } else {
-            out.push_str(&render_value_truncated(&result.value));
-        }
-        if let Some(ty) = &result.type_str {
-            if result.value.contains('\n') {
-                out.push_str(&format!("\n  {DIM}:: {ty}{RESET}"));
-            } else {
-                out.push_str(&format!("  {DIM}:: {ty}{RESET}"));
-            }
-        }
-        if config.show_timing {
-            if let Some(d) = elapsed {
-                out.push_str(&format_timing(d));
-            }
-        }
-        out.push('\n');
-    } else if parse::is_let_binding(&result.expr) {
-        if let Some(ty) = &result.type_str {
-            let name = parse::let_bound_name(&result.expr).unwrap_or_default();
-            out.push_str(&format!("{DIM}{name} :: {ty}{RESET}"));
-            if config.show_timing {
-                if let Some(d) = elapsed {
-                    out.push_str(&format_timing(d));
-                }
-            }
-            out.push('\n');
-        }
-    }
-
-    out
-}
-
-/// After interactive IO (output was already printed live), show diagnostics + type.
-pub fn render_interactive_tail(result: &EvalResult, config: &Config, elapsed: Option<Duration>) {
-    if !result.diagnostics.is_empty() {
-        for d in &result.diagnostics {
-            if config.pretty_errors {
-                eprint!("{}", render_diagnostic_pretty(d));
-            } else {
-                eprint!("{}", render_diagnostic_raw(d));
-            }
-        }
-        return;
+        return render_value_block(result, config, elapsed);
     }
 
     if parse::is_let_binding(&result.expr) {
         if let Some(ty) = &result.type_str {
             let name = parse::let_bound_name(&result.expr).unwrap_or_default();
-            print!("{DIM}{name} :: {ty}{RESET}");
-            if config.show_timing {
-                if let Some(d) = elapsed {
-                    print!("{}", format_timing(d));
-                }
-            }
-            println!();
+            return format!(
+                "{}{}\n",
+                style::dim().paint(format!("{name} :: {ty}")),
+                timing_suffix(config, elapsed),
+            );
         }
-    } else if let Some(ty) = &result.type_str {
-        // For expressions, show type if there was visible output
-        if !result.value.is_empty() {
+    }
+
+    String::new()
+}
+
+/// After interactive IO (output was already printed live), return diagnostics + type tail.
+pub fn render_interactive_tail(
+    result: &EvalResult,
+    config: &Config,
+    elapsed: Option<Duration>,
+) -> String {
+    if !result.diagnostics.is_empty() {
+        return render_diagnostics(&result.diagnostics, config);
+    }
+
+    if parse::is_let_binding(&result.expr) {
+        return result
+            .type_str
+            .as_deref()
+            .map(|ty| {
+                let name = parse::let_bound_name(&result.expr).unwrap_or_default();
+                format!(
+                    "{}{}\n",
+                    style::dim().paint(format!("{name} :: {ty}")),
+                    timing_suffix(config, elapsed),
+                )
+            })
+            .unwrap_or_default();
+    }
+
+    match &result.type_str {
+        Some(ty) if !result.value.is_empty() => {
             let prefix = if result.value.contains('\n') {
                 "\n  "
             } else {
                 "  "
             };
-            print!("{DIM}{prefix}:: {ty}{RESET}");
-            if config.show_timing {
-                if let Some(d) = elapsed {
-                    print!("{}", format_timing(d));
-                }
-            }
-            println!();
+            format!(
+                "{}{}\n",
+                style::dim().paint(format!("{prefix}:: {ty}")),
+                timing_suffix(config, elapsed),
+            )
         }
+        _ => String::new(),
     }
+}
+
+fn render_diagnostics(diags: &[Diagnostic], config: &Config) -> String {
+    let mut out = String::new();
+    for d in diags {
+        let block = if config.pretty_errors {
+            render_diagnostic_pretty(d)
+        } else {
+            render_diagnostic_raw(d)
+        };
+        out.push_str(&block);
+    }
+    out
+}
+
+fn render_value_block(result: &EvalResult, config: &Config, elapsed: Option<Duration>) -> String {
+    let is_io = result
+        .type_str
+        .as_deref()
+        .map(|t| t.starts_with("IO ") || t == "IO ()")
+        .unwrap_or(true);
+    let body = if is_io {
+        render_plain_truncated(&result.value)
+    } else {
+        render_value_truncated(&result.value)
+    };
+
+    let type_tail = result
+        .type_str
+        .as_deref()
+        .map(|ty| {
+            let prefix = if result.value.contains('\n') {
+                "\n  "
+            } else {
+                "  "
+            };
+            style::dim().paint(format!("{prefix}:: {ty}")).to_string()
+        })
+        .unwrap_or_default();
+
+    format!("{body}{type_tail}{}\n", timing_suffix(config, elapsed))
+}
+
+fn timing_suffix(config: &Config, elapsed: Option<Duration>) -> String {
+    if !config.show_timing {
+        return String::new();
+    }
+    elapsed.map(format_timing).unwrap_or_default()
 }
 
 fn format_timing(d: Duration) -> String {
     let secs = d.as_secs_f64();
-    if secs < 0.001 {
-        format!("  {DIM}(<1ms){RESET}")
+    let label = if secs < 0.001 {
+        "(<1ms)".to_string()
     } else if secs < 1.0 {
-        format!("  {DIM}({:.0}ms){RESET}", secs * 1000.0)
+        format!("({:.0}ms)", secs * 1000.0)
     } else {
-        format!("  {DIM}({:.2}s){RESET}", secs)
-    }
+        format!("({:.2}s)", secs)
+    };
+    format!("  {}", style::dim().paint(label))
 }
 
-fn char_truncate(value: &str) -> Option<(String, usize)> {
+fn char_truncate(value: &str) -> Option<(&str, usize)> {
     if value.len() <= MAX_OUTPUT_CHARS {
         return None;
     }
-    // Find a clean cut point: prefer a comma or space near the limit
     let cut = value[..MAX_OUTPUT_CHARS]
         .rfind(|c: char| c == ',' || c == ' ')
         .unwrap_or(MAX_OUTPUT_CHARS);
-    let remaining = value.len() - cut;
-    Some((value[..cut].to_string(), remaining))
+    Some((&value[..cut], value.len() - cut))
+}
+
+fn truncated_tail(remaining: usize, unit: &str) -> String {
+    style::dim()
+        .paint(format!("... ({remaining} more {unit})"))
+        .to_string()
 }
 
 fn render_value_truncated(value: &str) -> String {
-    // Character truncation first (handles single long lines)
-    if let Some((truncated, remaining)) = char_truncate(value) {
-        let mut out = highlight::highlight_input(&truncated);
-        out.push_str(&format!("\n{DIM}... ({remaining} more chars){RESET}"));
-        return out;
+    if let Some((head, remaining)) = char_truncate(value) {
+        return format!(
+            "{}\n{}",
+            highlight::highlight_input(head),
+            truncated_tail(remaining, "chars")
+        );
     }
     let lines: Vec<&str> = value.lines().collect();
     if lines.len() <= MAX_OUTPUT_LINES {
@@ -142,14 +166,15 @@ fn render_value_truncated(value: &str) -> String {
         .iter()
         .map(|l| highlight::highlight_input(l) + "\n")
         .collect();
-    let remaining = lines.len() - MAX_OUTPUT_LINES;
-    format!("{head}{DIM}... ({remaining} more lines){RESET}")
+    format!(
+        "{head}{}",
+        truncated_tail(lines.len() - MAX_OUTPUT_LINES, "lines")
+    )
 }
 
 fn render_plain_truncated(value: &str) -> String {
-    // Character truncation first
-    if let Some((truncated, remaining)) = char_truncate(value) {
-        return format!("{truncated}\n{DIM}... ({remaining} more chars){RESET}");
+    if let Some((head, remaining)) = char_truncate(value) {
+        return format!("{head}\n{}", truncated_tail(remaining, "chars"));
     }
     let lines: Vec<&str> = value.lines().collect();
     if lines.len() <= MAX_OUTPUT_LINES {
@@ -159,91 +184,87 @@ fn render_plain_truncated(value: &str) -> String {
         .iter()
         .map(|l| format!("{l}\n"))
         .collect();
-    let remaining = lines.len() - MAX_OUTPUT_LINES;
-    format!("{head}{DIM}... ({remaining} more lines){RESET}")
+    format!(
+        "{head}{}",
+        truncated_tail(lines.len() - MAX_OUTPUT_LINES, "lines")
+    )
 }
 
 fn render_diagnostic_raw(d: &Diagnostic) -> String {
-    let color = match d.severity.as_str() {
-        "warning" => YELLOW,
-        _ => RED,
-    };
-    format!("{color}{}{RESET}\n", d.message)
+    format!("{}\n", style::severity(&d.severity).paint(&d.message))
 }
 
 fn render_diagnostic_pretty(d: &Diagnostic) -> String {
-    let mut out = String::new();
-    let color = match d.severity.as_str() {
-        "warning" => YELLOW,
-        _ => RED,
-    };
-
-    out.push_str(color);
-    out.push_str(BOLD);
-    out.push_str(&d.severity);
-    out.push_str(RESET);
+    let sev_style = style::severity(&d.severity).bold();
+    let mut out = sev_style.paint(&d.severity).to_string();
 
     if let Some(loc) = &d.location {
-        out.push_str(&format!(" {DIM}at line {}:{}{RESET}", loc.line, loc.col));
+        let _ = write!(
+            out,
+            " {}",
+            style::dim().paint(format!("at line {}:{}", loc.line, loc.col))
+        );
     }
     out.push('\n');
 
-    // Expected vs actual in greeen / red
-    // TODO: tweak the alignment so its not just the `:`
-    if d.expected.is_some() || d.actual.is_some() {
-        if let Some(expected) = &d.expected {
-            out.push_str(&format!(
-                "  {GREEN}expected:{RESET} {GREEN}{expected}{RESET}\n"
-            ));
-        }
-        if let Some(actual) = &d.actual {
-            out.push_str(&format!("  {RED}  actual:{RESET} {RED}{actual}{RESET}\n"));
-        }
+    if let Some(expected) = &d.expected {
+        let _ = writeln!(
+            out,
+            "  {} {}",
+            style::ok().paint("expected:"),
+            style::ok().paint(expected.as_str()),
+        );
+    }
+    if let Some(actual) = &d.actual {
+        let _ = writeln!(
+            out,
+            "  {}   {}",
+            style::err().paint("actual:"),
+            style::err().paint(actual.as_str()),
+        );
     }
 
-    // Render the rest of the body, dropping anything already shown above.
     let has_exp_act = d.expected.is_some() || d.actual.is_some();
     let has_suggestion = d.suggestion.is_some();
     for line in d.message.lines().skip(1) {
         let trimmed = line.trim();
-        if has_exp_act
+        let drop_exp_act = has_exp_act
             && (trimmed.starts_with("Expected:")
                 || trimmed.starts_with("Expected type:")
                 || trimmed.starts_with("Actual:")
-                || trimmed.starts_with("Actual type:"))
-        {
-            continue;
-        }
-        if has_suggestion
+                || trimmed.starts_with("Actual type:"));
+        let drop_sugg = has_suggestion
             && (trimmed.starts_with("Perhaps you meant")
                 || trimmed.starts_with("Did you mean")
-                || trimmed.starts_with("Suggested fix:"))
-        {
+                || trimmed.starts_with("Suggested fix:"));
+        if drop_exp_act || drop_sugg {
             continue;
         }
         let cleaned = trimmed.replace('\u{2018}', "'").replace('\u{2019}', "'");
         if cleaned.is_empty() {
             continue;
         }
-        out.push_str(&format!("  {DIM}{cleaned}{RESET}\n"));
+        let _ = writeln!(out, "  {}", style::dim().paint(cleaned));
     }
 
-    // Suggestion
     if let Some(suggestion) = &d.suggestion {
-        out.push_str(&format!("  {CYAN}{suggestion}{RESET}\n"));
+        let _ = writeln!(out, "  {}", style::hint().paint(suggestion.as_str()));
     }
 
     if let Some(hint) = import_hint(d) {
-        out.push_str(&format!("  {CYAN}{hint}{RESET}\n"));
+        let _ = writeln!(out, "  {}", style::hint().paint(hint));
     }
 
-    // Error code URL at the bottom
     if let Some(code) = &d.code {
         if let Some(num) = code.strip_prefix("[GHC-").and_then(|s| s.strip_suffix(']')) {
             let url = format!("https://errors.haskell.org/messages/GHC-{num}");
-            out.push_str(&format!(
-                "  \x1b]8;;{url}\x1b\\\x1b[4m{DIM}{code}{RESET}\x1b]8;;\x1b\\ {DIM}{url}{RESET}\n"
-            ));
+            let label = style::dim().underline().paint(code.as_str()).to_string();
+            let _ = writeln!(
+                out,
+                "  {} {}",
+                style::hyperlink(&url, label),
+                style::dim().paint(url.as_str()),
+            );
         }
     }
 
@@ -389,48 +410,47 @@ const IMPORT_MAP: &[(&str, &str)] = &[
 ];
 
 pub fn render_bindings(output: &str, pattern: Option<&str>) -> String {
+    let empty_msg = || match pattern {
+        Some(pat) => format!(
+            "{}\n",
+            style::dim().paint(format!("(no bindings matching '{pat}')"))
+        ),
+        None => format!("{}\n", style::dim().paint("(no bindings)")),
+    };
+
     if output.trim().is_empty() {
-        return format!("{DIM}(no bindings){RESET}\n");
+        return empty_msg();
     }
 
-    let mut out = String::new();
     let pattern_lower = pattern.map(|p| p.trim().to_lowercase());
-
-    for line in output.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        // Filter by pattern (fuzzy substring match)
-        if let Some(pat) = &pattern_lower {
-            if !fuzzy_match(&trimmed.to_lowercase(), pat) {
-                continue;
+    let out: String = output
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter(|l| {
+            pattern_lower
+                .as_deref()
+                .map_or(true, |pat| fuzzy_match(&l.to_lowercase(), pat))
+        })
+        .map(|line| match line.find("::") {
+            Some(sep) => {
+                let name = line[..sep].trim();
+                let ty = line[sep + 2..].trim();
+                format!(
+                    "  {} {}\n",
+                    style::bold().paint(name),
+                    style::dim().paint(format!(":: {ty}"))
+                )
             }
-        }
-
-        // Highlight: name in bold, type dimmed
-        if let Some(sep) = trimmed.find("::") {
-            let name = &trimmed[..sep].trim();
-            let ty = &trimmed[sep + 2..].trim();
-            out.push_str(&format!("  {BOLD}{name}{RESET} {DIM}:: {ty}{RESET}\n"));
-        } else {
-            out.push_str(&format!(
-                "  {}{}\n",
-                highlight::highlight_input(trimmed),
-                RESET
-            ));
-        }
-    }
+            None => format!("  {}\n", highlight::highlight_input(line)),
+        })
+        .collect();
 
     if out.is_empty() {
-        if let Some(pat) = pattern {
-            return format!("{DIM}(no bindings matching '{pat}'){RESET}\n");
-        }
-        return format!("{DIM}(no bindings){RESET}\n");
+        empty_msg()
+    } else {
+        out
     }
-
-    out
 }
 
 fn fuzzy_match(haystack: &str, needle: &str) -> bool {
@@ -456,49 +476,47 @@ pub fn render_passthrough(output: &str) -> String {
 
 pub fn render_hoogle_results(results: &[crate::hoogle::HoogleResult]) -> String {
     if results.is_empty() {
-        return format!("{DIM}(no results){RESET}\n");
+        return format!("{}\n", style::dim().paint("(no results)"));
     }
     results
         .iter()
         .map(|r| {
-            let sig = if r.signature.is_empty() {
-                String::new()
-            } else {
-                format!(" {DIM}::{RESET} {CYAN}{}{RESET}", r.signature)
-            };
-            let module = if r.module.is_empty() {
-                String::new()
-            } else {
-                format!("  {DIM}{}{RESET}", r.module)
-            };
-            format!("  {BOLD}{}{RESET}{sig}{module}\n", r.name)
+            let sig = (!r.signature.is_empty())
+                .then(|| {
+                    format!(
+                        " {} {}",
+                        style::dim().paint("::"),
+                        style::type_sig().paint(r.signature.as_str()),
+                    )
+                })
+                .unwrap_or_default();
+            let module = (!r.module.is_empty())
+                .then(|| format!("  {}", style::dim().paint(r.module.as_str())))
+                .unwrap_or_default();
+            format!("  {}{sig}{module}\n", style::bold().paint(r.name.as_str()))
         })
         .collect()
 }
 
 pub fn render_hoogle_doc(result: &crate::hoogle::HoogleResult) -> String {
-    let mut out = String::new();
-
-    // Header: name :: signature
-    out.push_str(&format!("{BOLD}{}{RESET}", result.name));
+    let mut out = style::bold().paint(result.name.as_str()).to_string();
     if !result.signature.is_empty() {
-        out.push_str(&format!(
-            " {DIM}::{RESET} {CYAN}{}{RESET}",
-            result.signature
-        ));
+        let _ = write!(
+            out,
+            " {} {}",
+            style::dim().paint("::"),
+            style::type_sig().paint(result.signature.as_str())
+        );
     }
     out.push('\n');
 
-    // Module
     if !result.module.is_empty() {
-        out.push_str(&format!("{DIM}{}{RESET}\n", result.module));
+        let _ = writeln!(out, "{}", style::dim().paint(result.module.as_str()));
     }
 
     if !result.doc.is_empty() {
         out.push('\n');
         let mut prev_blank = false;
-        // TODO: better way of collapsing blank lines into one
-        // or aybe straight from Hoogle...a bit dubious
         for line in result.doc.lines() {
             let is_blank = line.trim().is_empty();
             if is_blank && prev_blank {
@@ -507,15 +525,14 @@ pub fn render_hoogle_doc(result: &crate::hoogle::HoogleResult) -> String {
             if is_blank {
                 out.push('\n');
             } else {
-                out.push_str(&format!("  {DIM}{line}{RESET}\n"));
+                let _ = writeln!(out, "  {}", style::dim().paint(line));
             }
             prev_blank = is_blank;
         }
     }
 
-    // URL
     if !result.url.is_empty() {
-        out.push_str(&format!("\n  {DIM}{}{RESET}\n", result.url));
+        let _ = writeln!(out, "\n  {}", style::dim().paint(result.url.as_str()));
     }
 
     out
@@ -681,7 +698,7 @@ mod tests {
             diagnostics: vec![make_diag("warning", "some warning")],
         };
         let out = render(&r, &default_cfg(), None);
-        assert!(out.contains(YELLOW));
+        assert!(out.contains(&style::warn().bold().prefix().to_string()));
     }
 
     #[test]
@@ -707,7 +724,7 @@ mod tests {
         let out = render(&r, &default_cfg(), None);
         let plain = strip_ansi(&out);
         assert!(plain.contains("f :: Num a => a -> a -> a"));
-        assert!(out.contains(DIM));
+        assert!(out.contains(&style::dim().prefix().to_string()));
     }
 
     #[test]
@@ -742,7 +759,7 @@ mod tests {
         let out = render(&r, &default_cfg(), None);
         let plain = strip_ansi(&out);
         assert!(plain.contains("Perhaps you meant"));
-        assert!(out.contains(CYAN));
+        assert!(out.contains(&style::hint().prefix().to_string()));
     }
 
     #[test]

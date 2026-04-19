@@ -1,16 +1,4 @@
-pub mod color {
-    pub const RESET: &str = "\x1b[0m";
-    pub const DIM: &str = "\x1b[2m";
-    pub const BOLD: &str = "\x1b[1m";
-    pub const RED: &str = "\x1b[31m";
-    pub const GREEN: &str = "\x1b[32m";
-    pub const YELLOW: &str = "\x1b[33m";
-    pub const BLUE: &str = "\x1b[34m";
-    pub const MAGENTA: &str = "\x1b[35m";
-    pub const CYAN: &str = "\x1b[36m";
-}
-
-use color::*;
+use crate::style;
 
 const KEYWORDS: &[&str] = &[
     "case",
@@ -61,61 +49,10 @@ struct Span {
 }
 
 pub fn highlight_input(input: &str) -> String {
-    let spans = tokenize(input);
-    let mut out = String::with_capacity(input.len() * 2);
-
-    for span in &spans {
-        let text = &input[span.start..span.end];
-        match span.kind {
-            Token::Keyword => {
-                out.push_str(MAGENTA);
-                out.push_str(BOLD);
-                out.push_str(text);
-                out.push_str(RESET);
-            }
-            Token::TypeCon => {
-                out.push_str(CYAN);
-                out.push_str(text);
-                out.push_str(RESET);
-            }
-            Token::StringLit => {
-                out.push_str(GREEN);
-                out.push_str(text);
-                out.push_str(RESET);
-            }
-            Token::CharLit => {
-                out.push_str(GREEN);
-                out.push_str(text);
-                out.push_str(RESET);
-            }
-            Token::Number => {
-                out.push_str(YELLOW);
-                out.push_str(text);
-                out.push_str(RESET);
-            }
-            Token::Comment => {
-                out.push_str(DIM);
-                out.push_str(text);
-                out.push_str(RESET);
-            }
-            Token::Operator => {
-                out.push_str(BLUE);
-                out.push_str(text);
-                out.push_str(RESET);
-            }
-            Token::GhciCmd => {
-                out.push_str(CYAN);
-                out.push_str(BOLD);
-                out.push_str(text);
-                out.push_str(RESET);
-            }
-            Token::Paren | Token::Ident | Token::Whitespace => {
-                out.push_str(text);
-            }
-        }
-    }
-
-    out
+    highlight_styled(input)
+        .iter()
+        .map(|(style, text)| style.paint(text.as_str()).to_string())
+        .collect()
 }
 
 /// Return styled segments for reedline's StyledText.
@@ -124,50 +61,44 @@ pub fn highlight_styled(input: &str) -> Vec<(nu_ansi_term::Style, String)> {
     // Handle :{ ... :} blocks: dim the delimiters, highlight body as Haskell
     let trimmed = input.trim();
     if trimmed.starts_with(":{") {
-        let mut segments = Vec::new();
-        let dim = nu_ansi_term::Style::new().dimmed();
-        for (i, line) in input.split('\n').enumerate() {
-            if i > 0 {
-                segments.push((nu_ansi_term::Style::default(), "\n".to_string()));
-            }
-            let lt = line.trim();
-            if lt == ":{" || lt == ":}" {
-                segments.push((dim, line.to_string()));
-            } else {
-                let spans = tokenize(line);
-                for span in &spans {
-                    let text = line[span.start..span.end].to_string();
-                    let style = token_style(span.kind);
-                    segments.push((style, text));
-                }
-            }
-        }
-        return segments;
+        return input
+            .split('\n')
+            .enumerate()
+            .flat_map(|(i, line)| {
+                let sep = (i > 0).then(|| (nu_ansi_term::Style::default(), "\n".to_string()));
+                let body: Vec<_> = match line.trim() {
+                    ":{" | ":}" => vec![(style::dim(), line.to_string())],
+                    _ => style_line(line),
+                };
+                sep.into_iter().chain(body)
+            })
+            .collect();
     }
+    style_line(input)
+}
 
-    let spans = tokenize(input);
-    let mut segments = Vec::with_capacity(spans.len());
-
-    for span in &spans {
-        let text = input[span.start..span.end].to_string();
-        let style = token_style(span.kind);
-        segments.push((style, text));
-    }
-
-    segments
+fn style_line(line: &str) -> Vec<(nu_ansi_term::Style, String)> {
+    tokenize(line)
+        .into_iter()
+        .map(|span| {
+            (
+                token_style(span.kind),
+                line[span.start..span.end].to_string(),
+            )
+        })
+        .collect()
 }
 
 fn token_style(kind: Token) -> nu_ansi_term::Style {
-    use nu_ansi_term::{Color as C, Style as S};
     match kind {
-        Token::Keyword => S::new().bold().fg(C::Magenta),
-        Token::TypeCon => S::new().fg(C::Cyan),
-        Token::StringLit | Token::CharLit => S::new().fg(C::Green),
-        Token::Number => S::new().fg(C::Yellow),
-        Token::Comment => S::new().dimmed(),
-        Token::Operator => S::new().fg(C::Blue),
-        Token::GhciCmd => S::new().bold().fg(C::Cyan),
-        Token::Paren | Token::Ident | Token::Whitespace => S::default(),
+        Token::Keyword => style::keyword(),
+        Token::TypeCon => style::type_con(),
+        Token::StringLit | Token::CharLit => style::string_lit(),
+        Token::Number => style::number(),
+        Token::Comment => style::dim(),
+        Token::Operator => style::operator(),
+        Token::GhciCmd => style::ghci_cmd(),
+        Token::Paren | Token::Ident | Token::Whitespace => nu_ansi_term::Style::default(),
     }
 }
 
@@ -426,55 +357,52 @@ fn is_operator_char(b: u8) -> bool {
 mod tests {
     use super::*;
 
+    fn styled_with(out: &str, style: nu_ansi_term::Style, text: &str) -> bool {
+        out.contains(&style.paint(text).to_string())
+    }
+
     #[test]
     fn test_keyword_highlighted() {
         let out = highlight_input("let x = 1");
-        assert!(out.contains(MAGENTA));
-        assert!(out.contains("let"));
+        assert!(styled_with(&out, style::keyword(), "let"));
     }
 
     #[test]
     fn test_string_highlighted() {
         let out = highlight_input("putStrLn \"hello\"");
-        assert!(out.contains(GREEN));
-        assert!(out.contains("\"hello\""));
+        assert!(styled_with(&out, style::string_lit(), "\"hello\""));
     }
 
     #[test]
     fn test_number_highlighted() {
         let out = highlight_input("42 + 3.14");
-        assert!(out.contains(YELLOW));
-        assert!(out.contains("42"));
-        assert!(out.contains("3.14"));
+        assert!(styled_with(&out, style::number(), "42"));
+        assert!(styled_with(&out, style::number(), "3.14"));
     }
 
     #[test]
     fn test_type_constructor() {
         let out = highlight_input("Just True");
-        assert!(out.contains(CYAN));
-        assert!(out.contains("Just"));
-        assert!(out.contains("True"));
+        assert!(styled_with(&out, style::type_con(), "Just"));
+        assert!(styled_with(&out, style::type_con(), "True"));
     }
 
     #[test]
     fn test_comment() {
         let out = highlight_input("1 + 1 -- add");
-        assert!(out.contains(DIM));
-        assert!(out.contains("-- add"));
+        assert!(styled_with(&out, style::dim(), "-- add"));
     }
 
     #[test]
     fn test_operator() {
         let out = highlight_input("x + y");
-        assert!(out.contains(BLUE));
-        assert!(out.contains("+"));
+        assert!(styled_with(&out, style::operator(), "+"));
     }
 
     #[test]
     fn test_ghci_command() {
         let out = highlight_input(":type map");
-        assert!(out.contains(CYAN));
-        assert!(out.contains(":type"));
+        assert!(styled_with(&out, style::ghci_cmd(), ":type"));
     }
 
     #[test]
@@ -489,16 +417,14 @@ mod tests {
     #[test]
     fn test_block_comment_highlight() {
         let out = highlight_input("{- comment -} 1");
-        assert!(out.contains(DIM));
-        assert!(out.contains("{- comment -}"));
+        assert!(styled_with(&out, style::dim(), "{- comment -}"));
     }
 
     #[test]
     fn test_hex_number() {
         let out = highlight_input("0xFF");
-        assert!(out.contains(YELLOW));
-        let stripped = strip_ansi(&out);
-        assert_eq!(stripped, "0xFF");
+        assert!(styled_with(&out, style::number(), "0xFF"));
+        assert_eq!(strip_ansi(&out), "0xFF");
     }
 
     fn strip_ansi(s: &str) -> String {

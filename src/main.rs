@@ -8,6 +8,7 @@ mod json;
 mod parse;
 mod render;
 mod session;
+mod style;
 
 use std::io::IsTerminal;
 use std::sync::{Arc, Mutex};
@@ -18,6 +19,10 @@ use reedline::{
     default_vi_insert_keybindings, default_vi_normal_keybindings, KeyCode, KeyModifiers, Reedline,
     ReedlineEvent, ReedlineMenu, Signal, Vi,
 };
+
+// Cursor control (not styling — nu_ansi_term doesn't model these).
+const CR: &str = "\r";
+const CLEAR_LINE: &str = "\x1b[2K";
 
 #[derive(Parser)]
 #[command(name = "ghcitty", about = "Fast, friendly GHCi", version)]
@@ -79,15 +84,18 @@ fn run(cli: Cli) -> error::Result<()> {
                 }
                 if !cli.json {
                     eprintln!(
-                        "\x1b[2m(restored {} expressions from {})\x1b[0m",
-                        exprs.len(),
-                        sess.path().display()
+                        "{}",
+                        style::dim().paint(format!(
+                            "(restored {} expressions from {})",
+                            exprs.len(),
+                            sess.path().display()
+                        ))
                     );
                 }
             }
             Err(_) => {
                 if !cli.json {
-                    eprintln!("\x1b[2m(no session to restore)\x1b[0m");
+                    eprintln!("{}", style::dim().paint("(no session to restore)"));
                 }
             }
         }
@@ -164,8 +172,9 @@ fn repl(
         g.snapshot_loaded_modules();
         drop(g);
         eprintln!(
-            "\x1b[1mghcitty {}\x1b[0m \x1b[2m(GHC {version})\x1b[0m",
-            env!("CARGO_PKG_VERSION")
+            "{} {}",
+            style::bold().paint(format!("ghcitty {}", env!("CARGO_PKG_VERSION"))),
+            style::dim().paint(format!("(GHC {version})")),
         );
     }
 
@@ -228,7 +237,7 @@ fn repl(
         if !json_mode {
             let mut g = ghc.lock().unwrap();
             if let Some(output) = g.check_reload() {
-                eprintln!("\x1b[2m(reloading...)\x1b[0m");
+                eprintln!("{}", style::dim().paint("(reloading...)"));
                 if !output.is_empty() {
                     print!("{}", render::render_passthrough(&output));
                 }
@@ -298,7 +307,11 @@ fn repl(
                 match do_undo(&ghc, sess, config, json_mode, n) {
                     Ok(count) => {
                         if !json_mode {
-                            eprintln!("\x1b[2m(undid {n}, replayed {count} expressions)\x1b[0m");
+                            eprintln!(
+                                "{}",
+                                style::dim()
+                                    .paint(format!("(undid {n}, replayed {count} expressions)"))
+                            );
                         }
                     }
                     Err(e) => eprintln!("undo: {e}"),
@@ -317,14 +330,17 @@ fn repl(
                         if json_mode {
                             println!("{}", json::to_json(&result));
                         } else if was_interactive {
-                            render::render_interactive_tail(&result, config, Some(elapsed));
+                            print!(
+                                "{}",
+                                render::render_interactive_tail(&result, config, Some(elapsed))
+                            );
                         } else {
                             print!("{}", render::render(&result, config, Some(elapsed)));
                         }
                     }
                     Ok(None) => {
                         if !json_mode {
-                            eprintln!("\x1b[2m(empty buffer, nothing to eval)\x1b[0m");
+                            eprintln!("{}", style::dim().paint("(empty buffer, nothing to eval)"));
                         }
                     }
                     Err(e) => eprintln!("edit: {e}"),
@@ -341,12 +357,15 @@ fn repl(
                         serde_json::json!({"command": ":doc", "query": name, "results": results.len()})
                     );
                 } else {
-                    eprint!("\x1b[2m(searching hoogle...)\x1b[0m\r");
+                    eprint!("{}{CR}", style::dim().paint("(searching hoogle...)"));
                     if let Some(result) = hoogle::doc(name) {
-                        eprint!("\x1b[2K"); // clear the "searching" line
+                        eprint!("{CLEAR_LINE}");
                         print!("{}", render::render_hoogle_doc(&result));
                     } else {
-                        eprintln!("\x1b[2K\x1b[2m(no docs found for '{name}')\x1b[0m");
+                        eprintln!(
+                            "{CLEAR_LINE}{}",
+                            style::dim().paint(format!("(no docs found for '{name}')"))
+                        );
                     }
                 }
                 continue;
@@ -361,9 +380,9 @@ fn repl(
                         serde_json::json!({"command": ":hoogle", "query": query, "count": results.len()})
                     );
                 } else {
-                    eprint!("\x1b[2m(searching hoogle...)\x1b[0m\r");
+                    eprint!("{}{CR}", style::dim().paint("(searching hoogle...)"));
                     let results = hoogle::search(query, 10);
-                    eprint!("\x1b[2K"); // clear the "searching" line
+                    eprint!("{CLEAR_LINE}");
                     print!("{}", render::render_hoogle_results(&results));
                 }
                 continue;
@@ -389,7 +408,10 @@ fn repl(
             if json_mode {
                 println!("{}", json::to_json(&result));
             } else if was_interactive {
-                render::render_interactive_tail(&result, &config, Some(elapsed));
+                print!(
+                    "{}",
+                    render::render_interactive_tail(&result, &config, Some(elapsed))
+                );
             } else {
                 print!("{}", render::render(&result, &config, Some(elapsed)));
             }
