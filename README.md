@@ -36,30 +36,9 @@
 - Auto-reload on file changes
 - Vi mode
 
-## Tour
+## Of note
 
-#### Auto-multiline with navigation
-Multiline is auto-detected. Up/Down to move between lines, blank line to submit.
-
-`:{` `:}` blocks also work as per the usual, with in-buffer navigation.
-
-<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/auto-multiline-nav.gif" width="600">
-
-
-#### Hoogle
-`:hoogle` to search by name or type, `:doc` for Haddock docs.
-
-<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/hoogle.gif" width="600">
-
-#### Vi mode and $EDITOR
-Vi keybindings. `Ctrl+G` opens `$EDITOR`, evals on save.
-
-<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/vi-mode.gif" width="600">
-
-#### Auto-reload
-Edit a loaded file and ghcitty picks up the changes automatically without `:r`
-
-<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/auto-reload.gif" width="600">
+At the end of the day, ghcitty is just a modest GHCi frontend w/ a tiny memory footprint to give some niceties to an already formidable, fun and proven REPL.
 
 ## Install
 
@@ -113,6 +92,31 @@ ghcitty --session work            Named session
 ghcitty --continue                Restore last session
 ```
 
+## Tour
+
+#### Auto-multiline with navigation
+Multiline is auto-detected. Up/Down to move between lines, blank line to submit.
+
+`:{` `:}` blocks also work as per the usual, with in-buffer navigation.
+
+<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/auto-multiline-nav.gif" width="600">
+
+
+#### Hoogle
+`:hoogle` to search by name or type, `:doc` for Haddock docs.
+
+<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/hoogle.gif" width="600">
+
+#### Vi mode and $EDITOR
+Vi keybindings. `Ctrl+G` opens `$EDITOR`, evals on save.
+
+<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/vi-mode.gif" width="600">
+
+#### Auto-reload
+Edit a loaded file and ghcitty picks up the changes automatically without `:r`
+
+<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/auto-reload.gif" width="600">
+
 ## Commands
 
 All GHCi `:` commands pass through. Extras:
@@ -132,10 +136,6 @@ All GHCi `:` commands pass through. Extras:
 pretty_errors = true   # structured error display (default: true)
 show_timing = true     # show eval timing (default: false)
 ```
-
-## Of note
-
-At the end of the day, ghcitty is just a modest GHCi frontend w/ a tiny memory footprint to give some niceties to an already formidable, fun and proven REPL.
 
 ## FAQ
 
