@@ -11,8 +11,6 @@
 
 # ghcitty
 
-[![Crates.io](https://img.shields.io/crates/v/ghcitty.svg)](https://crates.io/crates/ghcitty)
-
 **Fast, friendly GHCi**
 
 **ghcitty** is a tiny Rust binary that wraps GHCi with a snappy, delightful frontend
@@ -69,6 +67,8 @@ Edit a loaded file and ghcitty picks up the changes automatically without `:r`
 You just need a [GHC](https://www.haskell.org/ghcup/install/) and [Rust](https://rust-lang.org/tools/install/) installed
 
 ### Cargo
+
+[![Crates.io](https://img.shields.io/crates/v/ghcitty.svg)](https://crates.io/crates/ghcitty)
 
 ```
 cargo install ghcitty
