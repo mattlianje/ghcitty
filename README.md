@@ -3,7 +3,7 @@
 </div>
 
 <p align="center">
-  <img src="pix/ghcitty_github.png" width="350">
+  <img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/pix/ghcitty_github.png" width="350">
 </p>
 <!--
 # <img src="https://raw.githubusercontent.com/mattlianje/d4/refs/heads/master/pix/ghcitty.png" width="60"> ghcitty
@@ -16,7 +16,7 @@
 **ghcitty** is a tiny Rust binary that wraps GHCi with a snappy, delightful frontend
 
 <p align="center">
-  <img src="demos/completions-multiline.gif" width="600"><br>
+  <img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/completions-multiline.gif" width="600"><br>
   <sub><em>(demo) Tab completion, ghost hints, smart multiline</em></sub>
 </p>
 
@@ -43,23 +43,23 @@ Multiline is auto-detected. Up/Down to move between lines, blank line to submit.
 
 `:{` `:}` blocks also work as per the usual, with in-buffer navigation.
 
-<img src="demos/auto-multiline-nav.gif" width="600">
+<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/auto-multiline-nav.gif" width="600">
 
 
 #### Hoogle
 `:hoogle` to search by name or type, `:doc` for Haddock docs.
 
-<img src="demos/hoogle.gif" width="600">
+<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/hoogle.gif" width="600">
 
 #### Vi mode and $EDITOR
 Vi keybindings. `Ctrl+G` opens `$EDITOR`, evals on save.
 
-<img src="demos/vi-mode.gif" width="600">
+<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/vi-mode.gif" width="600">
 
 #### Auto-reload
 Edit a loaded file and ghcitty picks up the changes automatically without `:r`
 
-<img src="demos/auto-reload.gif" width="600">
+<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/auto-reload.gif" width="600">
 
 ## Install
 

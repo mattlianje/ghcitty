@@ -3,6 +3,11 @@ name = "ghcitty"
 version = "0.1.0"
 edition = "2021"
 description = "Fast, friendly GHCi"
+license = "MIT"
+repository = "https://github.com/mattlianje/ghcitty"
+readme = "README.md"
+keywords = ["haskell", "ghci", "repl"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "ghcitty"
