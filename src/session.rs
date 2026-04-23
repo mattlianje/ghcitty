@@ -15,6 +15,10 @@ pub fn history_path() -> PathBuf {
     dirs_fallback().join("ghcitty").join("history")
 }
 
+pub fn scratch_path() -> Result<PathBuf> {
+    Ok(sessions_dir()?.join("Scratch.hs"))
+}
+
 fn sessions_dir() -> Result<PathBuf> {
     let dir = dirs_fallback().join("ghcitty");
     fs::create_dir_all(&dir)?;

@@ -5,14 +5,18 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub pretty_errors: bool,
+    pub pretty_values: bool,
     pub show_timing: bool,
+    pub max_output_lines: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             pretty_errors: true,
+            pretty_values: true,
             show_timing: false,
+            max_output_lines: 20,
         }
     }
 }
@@ -26,18 +30,28 @@ impl Config {
         };
         let map = parse_ini(&content);
         Config {
-            pretty_errors: map
-                .get("pretty_errors")
-                .or(map.get("pretty-errors"))
-                .map(|v| v == "true" || v == "yes" || v == "1" || v == "on")
-                .unwrap_or(true),
-            show_timing: map
-                .get("show_timing")
-                .or(map.get("show-timing"))
-                .map(|v| v == "true" || v == "yes" || v == "1" || v == "on")
-                .unwrap_or(false),
+            pretty_errors: bool_setting(&map, "pretty_errors", true),
+            pretty_values: bool_setting(&map, "pretty_values", true),
+            show_timing: bool_setting(&map, "show_timing", false),
+            max_output_lines: usize_setting(&map, "max_output_lines", 20),
         }
     }
+}
+
+fn bool_setting(map: &HashMap<String, String>, key: &str, default: bool) -> bool {
+    let dashed = key.replace('_', "-");
+    map.get(key)
+        .or_else(|| map.get(&dashed))
+        .map(|v| matches!(v.as_str(), "true" | "yes" | "1" | "on"))
+        .unwrap_or(default)
+}
+
+fn usize_setting(map: &HashMap<String, String>, key: &str, default: usize) -> usize {
+    let dashed = key.replace('_', "-");
+    map.get(key)
+        .or_else(|| map.get(&dashed))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 fn config_path() -> PathBuf {
