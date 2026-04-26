@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub pretty_errors: bool,
-    pub pretty_values: bool,
+    pub pretty_print: bool,
     pub show_timing: bool,
     pub max_output_lines: usize,
 }
@@ -14,7 +14,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             pretty_errors: true,
-            pretty_values: true,
+            pretty_print: true,
             show_timing: false,
             max_output_lines: 20,
         }
@@ -31,10 +31,45 @@ impl Config {
         let map = parse_ini(&content);
         Config {
             pretty_errors: bool_setting(&map, "pretty_errors", true),
-            pretty_values: bool_setting(&map, "pretty_values", true),
+            pretty_print: bool_setting(&map, "pretty_print", true),
             show_timing: bool_setting(&map, "show_timing", false),
             max_output_lines: usize_setting(&map, "max_output_lines", 20),
         }
+    }
+}
+
+impl Config {
+    pub fn set(&mut self, key: &str, value: &str) -> std::result::Result<(), String> {
+        let normalized = key.replace('-', "_");
+        match normalized.as_str() {
+            "pretty_errors" => self.pretty_errors = parse_bool(value)?,
+            "pretty_print" => self.pretty_print = parse_bool(value)?,
+            "show_timing" => self.show_timing = parse_bool(value)?,
+            "max_output_lines" => {
+                self.max_output_lines = value
+                    .parse()
+                    .map_err(|_| format!("expected a number, got '{value}'"))?
+            }
+            _ => return Err(format!("unknown setting '{key}'")),
+        }
+        Ok(())
+    }
+
+    pub fn entries(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("pretty_errors", self.pretty_errors.to_string()),
+            ("pretty_print", self.pretty_print.to_string()),
+            ("show_timing", self.show_timing.to_string()),
+            ("max_output_lines", self.max_output_lines.to_string()),
+        ]
+    }
+}
+
+fn parse_bool(v: &str) -> std::result::Result<bool, String> {
+    match v.to_lowercase().as_str() {
+        "true" | "yes" | "1" | "on" => Ok(true),
+        "false" | "no" | "0" | "off" => Ok(false),
+        _ => Err(format!("expected true/false, got '{v}'")),
     }
 }
 
@@ -98,5 +133,28 @@ mod tests {
     fn test_config_default() {
         let c = Config::default();
         assert!(c.pretty_errors);
+    }
+
+    #[test]
+    fn test_set_bool_and_dashed() {
+        let mut c = Config::default();
+        c.set("pretty_print", "false").unwrap();
+        assert!(!c.pretty_print);
+        c.set("show-timing", "yes").unwrap();
+        assert!(c.show_timing);
+    }
+
+    #[test]
+    fn test_set_max_output_lines() {
+        let mut c = Config::default();
+        c.set("max_output_lines", "5").unwrap();
+        assert_eq!(c.max_output_lines, 5);
+        assert!(c.set("max_output_lines", "abc").is_err());
+    }
+
+    #[test]
+    fn test_set_unknown_key() {
+        let mut c = Config::default();
+        assert!(c.set("nope", "true").is_err());
     }
 }

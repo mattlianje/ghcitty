@@ -130,7 +130,7 @@ fn run(cli: Cli) -> error::Result<()> {
             }
         }
         None => {
-            repl(ghc, &mut sess, &config, cli.json, mode)?;
+            repl(ghc, &mut sess, config, cli.json, mode)?;
         }
     }
 
@@ -181,6 +181,109 @@ fn resolve_launch_mode(plain_flag: bool) -> ghc::LaunchMode {
     ghc::detect_project(&cwd).unwrap_or(ghc::LaunchMode::Plain)
 }
 
+fn gset_list(config: &config::Config, json_mode: bool) {
+    if json_mode {
+        let map: serde_json::Map<String, serde_json::Value> = config
+            .entries()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), serde_json::Value::String(v)))
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({ "command": ":gset", "config": map })
+        );
+    } else {
+        for (k, v) in config.entries() {
+            eprintln!(":gset_{k} = {}", style::dim().paint(v));
+        }
+    }
+}
+
+/// Dispatch `:gset_<key> [value]`. Bool keys toggle when no value is given;
+/// numeric keys require a value (no value prints the current one).
+fn gset_dispatch(expr: &str, config: &mut config::Config, json_mode: bool) {
+    let mut tokens = expr.split_whitespace();
+    let cmd = tokens.next().unwrap_or("");
+    let key = match cmd.strip_prefix(":gset_") {
+        Some(k) if !k.is_empty() => k,
+        _ => {
+            eprintln!("gset: missing key (try :gset for the list)");
+            return;
+        }
+    };
+    let arg = tokens.next();
+
+    let kind = config_kind(key);
+    let new_value = match (kind, arg) {
+        (Some(ConfigKind::Bool), None) => match key {
+            "pretty_errors" => {
+                config.pretty_errors = !config.pretty_errors;
+                config.pretty_errors.to_string()
+            }
+            "pretty_print" => {
+                config.pretty_print = !config.pretty_print;
+                config.pretty_print.to_string()
+            }
+            "show_timing" => {
+                config.show_timing = !config.show_timing;
+                config.show_timing.to_string()
+            }
+            _ => unreachable!(),
+        },
+        (Some(_), Some(v)) => match config.set(key, v) {
+            Ok(()) => v.to_string(),
+            Err(e) => {
+                eprintln!("gset: {e}");
+                return;
+            }
+        },
+        (Some(ConfigKind::Number), None) => {
+            let v = config
+                .entries()
+                .into_iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v)
+                .unwrap_or_default();
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({"command": cmd, "key": key, "value": v})
+                );
+            } else {
+                eprintln!(":gset_{key} = {}", style::dim().paint(v));
+            }
+            return;
+        }
+        (None, _) => {
+            eprintln!("gset: unknown key '{key}' (try :gset for the list)");
+            return;
+        }
+    };
+
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::json!({"command": cmd, "key": key, "value": new_value})
+        );
+    } else {
+        eprintln!(":gset_{key} = {}", style::dim().paint(new_value));
+    }
+}
+
+#[derive(Copy, Clone)]
+enum ConfigKind {
+    Bool,
+    Number,
+}
+
+fn config_kind(key: &str) -> Option<ConfigKind> {
+    match key {
+        "pretty_errors" | "pretty_print" | "show_timing" => Some(ConfigKind::Bool),
+        "max_output_lines" => Some(ConfigKind::Number),
+        _ => None,
+    }
+}
+
 /// Detects `:set prompt`, `:set prompt-cont`, `:set prompt-function`, etc.
 /// Also catches `:seti prompt ...` (the GHCi alias for `:set` in interactive mode).
 fn is_set_prompt(expr: &str) -> bool {
@@ -226,7 +329,7 @@ fn dedent(input: &str) -> String {
 fn repl(
     ghc: Arc<Mutex<ghc::GhcProcess>>,
     sess: &mut session::Session,
-    config: &config::Config,
+    mut config: config::Config,
     json_mode: bool,
     mode: ghc::LaunchMode,
 ) -> error::Result<()> {
@@ -391,6 +494,20 @@ fn repl(
                 continue;
             }
 
+            // :gset lists current settings. Per-knob commands like
+            // :gset_pretty_print toggle/set individual values. Session-only;
+            // ~/.ghcitty supplies the persisted defaults.
+            if expr == ":gset" {
+                drop(g);
+                gset_list(&config, json_mode);
+                continue;
+            }
+            if expr.starts_with(":gset_") {
+                drop(g);
+                gset_dispatch(&expr, &mut config, json_mode);
+                continue;
+            }
+
             // :undo [N]
             if expr == ":undo" || expr.starts_with(":undo ") {
                 let n: usize = expr
@@ -400,7 +517,7 @@ fn repl(
                     .parse()
                     .unwrap_or(1);
                 drop(g);
-                match do_undo(&ghc, sess, config, json_mode, n) {
+                match do_undo(&ghc, sess, &config, json_mode, n) {
                     Ok(count) => {
                         if !json_mode {
                             eprintln!(
@@ -461,10 +578,10 @@ fn repl(
                         } else if was_interactive {
                             print!(
                                 "{}",
-                                render::render_interactive_tail(&result, config, Some(elapsed))
+                                render::render_interactive_tail(&result, &config, Some(elapsed))
                             );
                         } else {
-                            print!("{}", render::render(&result, config, Some(elapsed)));
+                            print!("{}", render::render(&result, &config, Some(elapsed)));
                         }
                     }
                     Ok(None) => {

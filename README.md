@@ -24,11 +24,14 @@
 
 - Syntax highlighting
 - Structured errors with expected/actual diffs, auto-import hints, error code links
-- Tab completion dropdowns
+- Tab completion with inline types
 - Fish-style ghost completions
+- Pretty-printed `Show` output (records, lists, tuples)
 - Hoogle integration
 - Binding explorer
 - `:edit` opens `$EDITOR`, evals on save
+- `:scratch` for a persistent scratch buffer
+- Auto-detect stack/cabal projects
 - Auto-detected multiline
 - Bracketed paste
 - Auto-saved, resumable sessions
@@ -128,18 +131,29 @@ All GHCi `:` commands pass through. Extras:
 :/ OR :/<???>              Show all bindings OR fuzzy search for <???> binding
 :e OR :edit OR <CTRL> + g  Open $EDITOR, eval on save
 :scratch                   Open a persistent scratch .hs in $EDITOR, :load on save
-:undo <N>                  Undo last <N> expressions 
+:undo <N>                  Undo last <N> expressions
+:gset                      List runtime config
+:gset_<key> [value]        Toggle a bool, or set a value (session-only)
 ```
 
 ## Config
 
-`~/.ghcitty` (key=value):
+`~/.ghcitty` (key=value) sets the persisted defaults:
 
 ```
 pretty_errors = true     # structured error display (default: true)
-pretty_values = true     # pretty-print Show output (default: true)
+pretty_print = true      # pretty-print Show output (default: true)
 max_output_lines = 20    # truncate output past this many lines (default: 20)
-show_timing = true       # show eval timing (default: false)
+show_timing = false      # show eval timing (default: false)
+```
+
+Tweak any of these for the current session with `:gset_<key>`. Bool keys
+toggle when called with no argument:
+
+```
+:gset_pretty_print            # flips on/off, prints the new value
+:gset_max_output_lines 50     # set a new cap
+:gset                         # show everything
 ```
 
 ## FAQ
@@ -151,9 +165,10 @@ It might also be of small use to happy hackers who still program.
 
 **How does it work?**<br>
 - Commands are fenced with sentinel markers so ghcitty knows exactly where your output begins and ends.
-- For eval, it sends `:type expr` first to capture the type, then the expression itself. 
-- Definitions skip the type query and look up the bound name after. 
-- All GHCi `:` commands pass through untouched.
+- For eval, it sends `:type expr` first to capture the type, then the expression itself.
+- Definitions skip the type query and look up the bound name after.
+- All GHCi `:` commands pass through. The one exception is `:set prompt`: ghcitty drives GHCi via a sentinel prompt, so it rejects prompt changes rather than deadlocking.
+- `Ctrl+C` is forwarded to GHCi via the PTY so a long-running expression aborts instead of killing the REPL.
 
 **How do the multiline heuristics work?**<br>
 Basically "automatic" multiline uses a pretty simple and reliable heuristic...
@@ -163,6 +178,8 @@ Basically "automatic" multiline uses a pretty simple and reliable heuristic...
 
 **How does completion work?**<br>
 - `<TAB>` opens a columnar menu using `:complete repl` with full line context, so `:m + Data.Li<Tab>` completes module names.
+- For short candidate lists, the type of each match shows alongside it.
+- Ghcitty's own slash commands (`:scratch`, `:gset_*`, `:edit`, `:undo`, `:doc`, `:hoogle`) appear in completions and ghost hints too.
 - Ghost completions show the top match dimmed after 2+ chars.
 
 **How does the hoogle integration work?**<br>

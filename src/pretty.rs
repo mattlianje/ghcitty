@@ -105,6 +105,12 @@ fn parse(input: &str) -> Vec<Node> {
     root.items.into_iter().flatten().collect()
 }
 
+fn is_flat(items: &[Vec<Node>]) -> bool {
+    items
+        .iter()
+        .all(|item| item.iter().all(|n| matches!(n, Node::Atom(_))))
+}
+
 fn inline(node: &Node) -> String {
     match node {
         Node::Atom(s) => s.clone(),
@@ -131,6 +137,11 @@ fn render_node(node: &Node, col: usize) -> String {
         Node::Group { open, close, items } => {
             if items.is_empty() {
                 return format!("{open}{close}");
+            }
+            // Flat lists/tuples (no nested groups) stay inline; truncation
+            // handles the long ones. Records ({}) still expand.
+            if matches!(open, '[' | '(') && is_flat(items) {
+                return il;
             }
             if items.len() == 1 {
                 // Single-item group like `Just (Just (Just 5))`: recurse into
@@ -266,6 +277,28 @@ User { name = \"Alice\"
     #[test]
     fn tuple_inline() {
         assert_eq!(pretty("(1, 2, 3)"), "(1, 2, 3)");
+    }
+
+    #[test]
+    fn long_flat_list_stays_inline() {
+        let xs: Vec<String> = (1..=50).map(|n| n.to_string()).collect();
+        let input = format!("[{}]", xs.join(", "));
+        assert_eq!(pretty(&input), input);
+    }
+
+    #[test]
+    fn long_flat_tuple_stays_inline() {
+        let xs: Vec<String> = (1..=20).map(|n| n.to_string()).collect();
+        let input = format!("({})", xs.join(", "));
+        assert_eq!(pretty(&input), input);
+    }
+
+    #[test]
+    fn list_of_records_still_expands() {
+        let input =
+            "[User {name = \"Alice\", age = 30}, User {name = \"Bob\", age = 25}, User {name = \"Carol\", age = 28}]";
+        let out = pretty(input);
+        assert!(out.starts_with("[ User"), "got: {out}");
     }
 
     #[test]

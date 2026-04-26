@@ -92,7 +92,7 @@ fn render_value_block(result: &EvalResult, config: &Config, elapsed: Option<Dura
         .as_deref()
         .map(|t| t.starts_with("IO ") || t == "IO ()")
         .unwrap_or(true);
-    let value = if !is_io && config.pretty_values {
+    let value = if !is_io && config.pretty_print {
         crate::pretty::pretty(&result.value)
     } else {
         result.value.clone()
@@ -683,7 +683,7 @@ mod tests {
     fn raw_cfg() -> Config {
         Config {
             pretty_errors: false,
-            pretty_values: false,
+            pretty_print: false,
             show_timing: false,
             max_output_lines: 20,
         }
@@ -691,7 +691,7 @@ mod tests {
     fn timing_cfg() -> Config {
         Config {
             pretty_errors: true,
-            pretty_values: true,
+            pretty_print: true,
             show_timing: true,
             max_output_lines: 20,
         }

@@ -69,7 +69,19 @@ const TYPE_DESC_CAP: usize = 12;
 /// Slash commands implemented by ghcitty itself, which GHCi's `:complete repl`
 /// doesn't know about. Trailing space on commands that take an argument so Tab
 /// leaves the cursor ready to type.
-const GHCITTY_CMDS: &[&str] = &[":scratch", ":edit", ":e", ":undo", ":doc ", ":hoogle "];
+const GHCITTY_CMDS: &[&str] = &[
+    ":scratch",
+    ":edit",
+    ":e",
+    ":undo",
+    ":doc ",
+    ":hoogle ",
+    ":gset",
+    ":gset_pretty_errors",
+    ":gset_pretty_print",
+    ":gset_show_timing",
+    ":gset_max_output_lines ",
+];
 
 /// Prepend any ghcitty-native commands matching `word` to the GHCi completion
 /// list. Prepended (not appended) so they win ties for ghost completion.
