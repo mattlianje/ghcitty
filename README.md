@@ -82,8 +82,8 @@ The version banner shows which one (`ghcitty 0.1.0 (GHC 9.6.7, via cabal repl)`)
 Pass `--plain` to force bare `ghci`.
 
 ```
-ghcitty            # auto-detects: stack ghci / cabal repl / plain ghci
-ghcitty --plain    # always plain ghci
+ghcitty            auto-detects: stack ghci / cabal repl / plain ghci
+ghcitty --plain    always plain ghci
 ```
 
 ## Usage
