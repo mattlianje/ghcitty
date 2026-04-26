@@ -75,8 +75,10 @@ nix profile install github:mattlianje/ghcitty
 ### Cabal / Stack
 
 Run `ghcitty` from a directory containing `stack.yaml`, `cabal.project`, or a `*.cabal` file
-and it launches via `stack ghci` / `cabal repl`, so your project modules are in scope
-automatically. The version banner shows which one (`ghcitty 0.1.0 (GHC 9.6.7, via cabal repl)`).
+and it launches via `stack ghci` / `cabal repl`
+
+The version banner shows which one (`ghcitty 0.1.0 (GHC 9.6.7, via cabal repl)`).
+
 Pass `--plain` to force bare `ghci`.
 
 ```
