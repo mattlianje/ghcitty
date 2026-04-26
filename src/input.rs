@@ -61,6 +61,39 @@ pub struct GhciCompleter {
     pub ghc: Arc<Mutex<GhcProcess>>,
 }
 
+/// Cap on candidates we'll fetch types for. ColumnarMenu switches to a
+/// single-column layout once any candidate has a description, so showing
+/// types for a long list would balloon the menu. Above this, we skip types.
+const TYPE_DESC_CAP: usize = 12;
+
+/// Slash commands implemented by ghcitty itself, which GHCi's `:complete repl`
+/// doesn't know about. Trailing space on commands that take an argument so Tab
+/// leaves the cursor ready to type.
+const GHCITTY_CMDS: &[&str] = &[":scratch", ":edit", ":e", ":undo", ":doc ", ":hoogle "];
+
+/// Prepend any ghcitty-native commands matching `word` to the GHCi completion
+/// list. Prepended (not appended) so they win ties for ghost completion.
+fn merge_ghcitty_cmds(word: &str, completions: Vec<String>) -> Vec<String> {
+    if !word.starts_with(':') {
+        return completions;
+    }
+    let matches: Vec<String> = GHCITTY_CMDS
+        .iter()
+        .filter(|c| c.starts_with(word))
+        .map(|c| c.to_string())
+        .collect();
+    if matches.is_empty() {
+        return completions;
+    }
+    let mut out = matches;
+    for c in completions {
+        if !out.iter().any(|o| o.trim_end() == c.trim_end()) {
+            out.push(c);
+        }
+    }
+    out
+}
+
 impl ReedlineCompleter for GhciCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
         let pos = pos.min(line.len());
@@ -75,27 +108,34 @@ impl ReedlineCompleter for GhciCompleter {
             return vec![];
         }
 
-        let completions = {
-            let Ok(mut ghc) = self.ghc.lock() else {
-                return vec![];
-            };
-            match ghc.complete(prefix) {
-                Ok(c) => c,
-                Err(_) => vec![],
-            }
+        let Ok(mut ghc) = self.ghc.lock() else {
+            return vec![];
         };
+        let completions = match ghc.complete(prefix) {
+            Ok(c) => c,
+            Err(_) => return vec![],
+        };
+        let completions = merge_ghcitty_cmds(word, completions);
+        let want_types = completions.len() <= TYPE_DESC_CAP;
 
         completions
             .into_iter()
-            .map(|c| Suggestion {
-                value: c,
-                display_override: None,
-                description: None,
-                style: None,
-                extra: None,
-                span: Span::new(word_start, pos),
-                append_whitespace: false,
-                match_indices: None,
+            .map(|c| {
+                let description = if want_types && !c.starts_with(':') {
+                    ghc.type_of(&c).ok().flatten()
+                } else {
+                    None
+                };
+                Suggestion {
+                    value: c,
+                    display_override: None,
+                    description,
+                    style: None,
+                    extra: None,
+                    span: Span::new(word_start, pos),
+                    append_whitespace: false,
+                    match_indices: None,
+                }
             })
             .collect()
     }
@@ -182,6 +222,7 @@ impl ReedlineHinter for GhciHinter {
                         Err(_) => return String::new(),
                     }
                 };
+                let completions = merge_ghcitty_cmds(word, completions);
                 let first = completions.iter().find(|s| s.starts_with(word)).cloned();
                 self.cache = Some(HintCache {
                     prefix: prefix.to_string(),
@@ -564,6 +605,31 @@ mod tests {
     #[test]
     fn test_balanced_parens() {
         assert!(!is_incomplete("map (+1) [1,2,3]"));
+    }
+
+    #[test]
+    fn test_merge_ghcitty_cmds_prepends_matches() {
+        let merged = merge_ghcitty_cmds(":scr", vec![":script".into(), ":show".into()]);
+        assert_eq!(merged.first().map(String::as_str), Some(":scratch"));
+        assert!(merged.iter().any(|c| c == ":script"));
+    }
+
+    #[test]
+    fn test_merge_ghcitty_cmds_no_colon_prefix() {
+        let cs = vec!["map".into(), "mapM".into()];
+        assert_eq!(merge_ghcitty_cmds("ma", cs.clone()), cs);
+    }
+
+    #[test]
+    fn test_merge_ghcitty_cmds_no_match_passthrough() {
+        let cs = vec![":show".into(), ":set".into()];
+        assert_eq!(merge_ghcitty_cmds(":sh", cs.clone()), cs);
+    }
+
+    #[test]
+    fn test_merge_ghcitty_cmds_arg_command_has_trailing_space() {
+        let merged = merge_ghcitty_cmds(":doc", vec![]);
+        assert_eq!(merged, vec![":doc ".to_string()]);
     }
 
     #[test]

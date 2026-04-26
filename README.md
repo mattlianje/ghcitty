@@ -74,12 +74,14 @@ nix profile install github:mattlianje/ghcitty
 
 ### Cabal / Stack
 
-`ghcitty` wraps `ghci`, so run it through your build tool to pick up project dependencies
-(same as `cabal repl`)
+Run `ghcitty` from a directory containing `stack.yaml`, `cabal.project`, or a `*.cabal` file
+and it launches via `stack ghci` / `cabal repl`, so your project modules are in scope
+automatically. The version banner shows which one (`ghcitty 0.1.0 (GHC 9.6.7, via cabal repl)`).
+Pass `--plain` to force bare `ghci`.
 
 ```
-cabal exec -- ghcitty
-stack exec -- ghcitty
+ghcitty            # auto-detects: stack ghci / cabal repl / plain ghci
+ghcitty --plain    # always plain ghci
 ```
 
 ## Usage
@@ -125,6 +127,7 @@ All GHCi `:` commands pass through. Extras:
 :doc <???>                 Haddock docs for <???> via Hoogle
 :/ OR :/<???>              Show all bindings OR fuzzy search for <???> binding
 :e OR :edit OR <CTRL> + g  Open $EDITOR, eval on save
+:scratch                   Open a persistent scratch .hs in $EDITOR, :load on save
 :undo <N>                  Undo last <N> expressions 
 ```
 
@@ -133,8 +136,10 @@ All GHCi `:` commands pass through. Extras:
 `~/.ghcitty` (key=value):
 
 ```
-pretty_errors = true   # structured error display (default: true)
-show_timing = true     # show eval timing (default: false)
+pretty_errors = true     # structured error display (default: true)
+pretty_values = true     # pretty-print Show output (default: true)
+max_output_lines = 20    # truncate output past this many lines (default: 20)
+show_timing = true       # show eval timing (default: false)
 ```
 
 ## FAQ

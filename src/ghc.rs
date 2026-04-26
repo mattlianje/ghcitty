@@ -1,14 +1,99 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::SystemTime;
 
 use crate::error::{Error, Result};
 use crate::parse::{self, EvalResult, SENTINEL};
+
+/// PTY master fd for the active GHCi process. Read by the SIGINT handler to
+/// forward ^C to GHCi (so the running expression aborts, not ghcitty itself).
+static PTY_MASTER_FD: AtomicI32 = AtomicI32::new(-1);
+
+/// How to launch GHCi: bare, or wrapped by stack/cabal so project modules
+/// auto-load. Detected by `detect_project` checking `dir` only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchMode {
+    Plain,
+    Stack,
+    Cabal,
+}
+
+impl LaunchMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Plain => "ghci",
+            Self::Stack => "stack ghci",
+            Self::Cabal => "cabal repl",
+        }
+    }
+}
+
+/// Detect project tooling in `dir` only (no parent walking). Returns the
+/// matching launch mode if a marker file sits directly in `dir`, else None.
+pub fn detect_project(dir: &Path) -> Option<LaunchMode> {
+    if dir.join("stack.yaml").exists() {
+        return Some(LaunchMode::Stack);
+    }
+    if dir.join("cabal.project").exists() {
+        return Some(LaunchMode::Cabal);
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().and_then(|e| e.to_str()) == Some("cabal") {
+                return Some(LaunchMode::Cabal);
+            }
+        }
+    }
+    None
+}
+
+extern "C" fn forward_sigint(_sig: libc::c_int) {
+    let fd = PTY_MASTER_FD.load(Ordering::Relaxed);
+    if fd >= 0 {
+        let buf = [0x03u8];
+        // write(2) is async-signal-safe.
+        unsafe {
+            libc::write(fd, buf.as_ptr() as *const libc::c_void, 1);
+        }
+    }
+}
+
+#[cfg(unix)]
+struct SigintGuard {
+    old: libc::sigaction,
+}
+
+#[cfg(unix)]
+impl SigintGuard {
+    fn install() -> Self {
+        unsafe {
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = forward_sigint as *const () as usize;
+            libc::sigemptyset(&mut sa.sa_mask);
+            // No SA_RESTART, so poll() returns EINTR and we loop to read
+            // GHCi's interrupt response
+            sa.sa_flags = 0;
+            let mut old: libc::sigaction = std::mem::zeroed();
+            libc::sigaction(libc::SIGINT, &sa, &mut old);
+            SigintGuard { old }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SigintGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::sigaction(libc::SIGINT, &self.old, std::ptr::null_mut());
+        }
+    }
+}
 
 pub struct GhcProcess {
     child: Child,
@@ -21,26 +106,44 @@ pub struct GhcProcess {
 }
 
 impl GhcProcess {
-    pub fn spawn() -> Result<Self> {
-        let ghci = find_ghci().ok_or_else(|| Error::Ghc("ghci not found".into()))?;
+    pub fn spawn_with_mode(mode: LaunchMode) -> Result<Self> {
+        let (program, args) = match mode {
+            LaunchMode::Plain => {
+                let ghci = find_ghci().ok_or_else(|| Error::Ghc("ghci not found".into()))?;
+                (ghci, vec!["-v0".to_string()])
+            }
+            LaunchMode::Stack => (
+                "stack".to_string(),
+                vec!["ghci".into(), "--ghci-options=-v0".into()],
+            ),
+            LaunchMode::Cabal => (
+                "cabal".to_string(),
+                vec!["repl".into(), "--repl-options=-v0".into()],
+            ),
+        };
 
         // PTY so GHCi stays in interactive mode
         let (master_fd, slave_fd) = open_pty()?;
 
         let slave_stdio = unsafe { Stdio::from(std::os::unix::io::OwnedFd::from_raw_fd(slave_fd)) };
 
-        let mut child = Command::new(&ghci)
-            .arg("-v0")
+        let mut child = Command::new(&program)
+            .args(&args)
             .stdin(slave_stdio)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| Error::Ghc(format!("failed to spawn {ghci}: {e}")))?;
+            .map_err(|e| Error::Ghc(format!("failed to spawn {program}: {e}")))?;
 
         let pty_master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        PTY_MASTER_FD.store(master_fd, Ordering::Relaxed);
         let stdout = BufReader::new(child.stdout.take().unwrap());
 
-        // Drain stderr in background to avoid pipe deadlock
+        // stack/cabal print build progress on stderr before GHCi is ready;
+        // tee it through so a long first build doesn't look like a hang.
+        let tee_stderr = Arc::new(AtomicBool::new(mode != LaunchMode::Plain));
+        let tee_clone = Arc::clone(&tee_stderr);
+
         let stderr = child.stderr.take().unwrap();
         let stderr_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let stderr_capture = Arc::clone(&stderr_lines);
@@ -48,7 +151,11 @@ impl GhcProcess {
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
                 if let Ok(line) = line {
-                    stderr_capture.lock().unwrap().push(line);
+                    if tee_clone.load(Ordering::Relaxed) {
+                        eprintln!("{line}");
+                    } else {
+                        stderr_capture.lock().unwrap().push(line);
+                    }
                 }
             }
         });
@@ -66,7 +173,15 @@ impl GhcProcess {
         proc.send_raw(":set prompt \"\"")?;
         proc.send_raw(":set prompt-cont \"\"")?;
         proc.send_raw(&format!("putStrLn \"{}\"", SENTINEL))?;
-        proc.read_until_sentinel_fuzzy()?;
+        if mode == LaunchMode::Plain {
+            proc.read_until_sentinel_fuzzy()?;
+        } else {
+            proc.read_until_sentinel_streaming()?;
+        }
+
+        // Stop teeing now that GHCi is ready; subsequent stderr is per-command
+        // diagnostics that the renderer wants to format.
+        tee_stderr.store(false, Ordering::Relaxed);
 
         // Set sentinel as the prompt and clear continuation prompt in one batch
         proc.send_raw(&format!(":set prompt \"{}\\n\"", SENTINEL))?;
@@ -99,6 +214,25 @@ impl GhcProcess {
             output.push_str(&line);
         }
         Ok(output)
+    }
+
+    /// Like `read_until_sentinel_fuzzy`, but tees each pre-sentinel line to
+    /// the user's stderr. Used during project-mode init so a long stack/cabal
+    /// build doesn't look like ghcitty has hung.
+    fn read_until_sentinel_streaming(&mut self) -> Result<()> {
+        loop {
+            let mut line = String::new();
+            let n = self.stdout.read_line(&mut line)?;
+            if n == 0 {
+                return Err(Error::Ghc(
+                    "ghci wrapper exited during init (build failed?)".into(),
+                ));
+            }
+            if line.contains(SENTINEL) {
+                return Ok(());
+            }
+            eprint!("{line}");
+        }
     }
 
     fn read_until_sentinel(&mut self) -> Result<String> {
@@ -146,6 +280,10 @@ impl GhcProcess {
     /// if GHCi doesn't respond within 200ms.
     #[cfg(unix)]
     pub fn command_interactive(&mut self, cmd: &str) -> Result<(String, Vec<String>, bool)> {
+        // While an expression is running, ^C from the terminal must abort the
+        // expression (forwarded to GHCi via the PTY) instead of killing us.
+        let _sigint = SigintGuard::install();
+
         self.drain_stderr();
 
         if cmd.contains('\n') {
@@ -527,4 +665,61 @@ fn which_exists(cmd: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ghcitty-test-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn detects_stack_at_root() {
+        let root = fresh_dir("project-stack");
+        fs::write(root.join("stack.yaml"), "resolver: lts-22.0\n").unwrap();
+        assert_eq!(detect_project(&root), Some(LaunchMode::Stack));
+    }
+
+    #[test]
+    fn detects_cabal_project_at_root() {
+        let root = fresh_dir("project-cabal");
+        fs::write(root.join("cabal.project"), "packages: .\n").unwrap();
+        assert_eq!(detect_project(&root), Some(LaunchMode::Cabal));
+    }
+
+    #[test]
+    fn detects_bare_cabal_file() {
+        let root = fresh_dir("project-bare-cabal");
+        fs::write(root.join("foo.cabal"), "name: foo\n").unwrap();
+        assert_eq!(detect_project(&root), Some(LaunchMode::Cabal));
+    }
+
+    #[test]
+    fn does_not_walk_up_from_subdir() {
+        let root = fresh_dir("project-no-walkup");
+        fs::write(root.join("stack.yaml"), "resolver: lts-22.0\n").unwrap();
+        let nested = root.join("src/lib/deep");
+        fs::create_dir_all(&nested).unwrap();
+        assert_eq!(detect_project(&nested), None);
+    }
+
+    #[test]
+    fn stack_wins_over_cabal_at_same_level() {
+        let root = fresh_dir("project-stack-wins");
+        fs::write(root.join("stack.yaml"), "resolver: lts-22.0\n").unwrap();
+        fs::write(root.join("foo.cabal"), "name: foo\n").unwrap();
+        assert_eq!(detect_project(&root), Some(LaunchMode::Stack));
+    }
+
+    #[test]
+    fn no_project_returns_none() {
+        let root = fresh_dir("project-none");
+        assert_eq!(detect_project(&root), None);
+    }
 }

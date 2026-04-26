@@ -6,7 +6,6 @@ use crate::highlight;
 use crate::parse::{self, Diagnostic, EvalResult};
 use crate::style;
 
-const MAX_OUTPUT_LINES: usize = 20;
 const MAX_OUTPUT_CHARS: usize = 3000;
 
 pub fn render(result: &EvalResult, config: &Config, elapsed: Option<Duration>) -> String {
@@ -93,21 +92,22 @@ fn render_value_block(result: &EvalResult, config: &Config, elapsed: Option<Dura
         .as_deref()
         .map(|t| t.starts_with("IO ") || t == "IO ()")
         .unwrap_or(true);
-    let body = if is_io {
-        render_plain_truncated(&result.value)
+    let value = if !is_io && config.pretty_values {
+        crate::pretty::pretty(&result.value)
     } else {
-        render_value_truncated(&result.value)
+        result.value.clone()
+    };
+    let body = if is_io {
+        render_plain_truncated(&value, config.max_output_lines)
+    } else {
+        render_value_truncated(&value, config.max_output_lines)
     };
 
     let type_tail = result
         .type_str
         .as_deref()
         .map(|ty| {
-            let prefix = if result.value.contains('\n') {
-                "\n  "
-            } else {
-                "  "
-            };
+            let prefix = if value.contains('\n') { "\n  " } else { "  " };
             style::dim().paint(format!("{prefix}:: {ty}")).to_string()
         })
         .unwrap_or_default();
@@ -150,7 +150,7 @@ fn truncated_tail(remaining: usize, unit: &str) -> String {
         .to_string()
 }
 
-fn render_value_truncated(value: &str) -> String {
+fn render_value_truncated(value: &str, max_lines: usize) -> String {
     if let Some((head, remaining)) = char_truncate(value) {
         return format!(
             "{}\n{}",
@@ -159,35 +159,29 @@ fn render_value_truncated(value: &str) -> String {
         );
     }
     let lines: Vec<&str> = value.lines().collect();
-    if lines.len() <= MAX_OUTPUT_LINES {
+    if lines.len() <= max_lines {
         return highlight::highlight_input(value);
     }
-    let head: String = lines[..MAX_OUTPUT_LINES]
+    let head: String = lines[..max_lines]
         .iter()
         .map(|l| highlight::highlight_input(l) + "\n")
         .collect();
-    format!(
-        "{head}{}",
-        truncated_tail(lines.len() - MAX_OUTPUT_LINES, "lines")
-    )
+    format!("{head}{}", truncated_tail(lines.len() - max_lines, "lines"))
 }
 
-fn render_plain_truncated(value: &str) -> String {
+fn render_plain_truncated(value: &str, max_lines: usize) -> String {
     if let Some((head, remaining)) = char_truncate(value) {
         return format!("{head}\n{}", truncated_tail(remaining, "chars"));
     }
     let lines: Vec<&str> = value.lines().collect();
-    if lines.len() <= MAX_OUTPUT_LINES {
+    if lines.len() <= max_lines {
         return value.to_string();
     }
-    let head: String = lines[..MAX_OUTPUT_LINES]
+    let head: String = lines[..max_lines]
         .iter()
         .map(|l| format!("{l}\n"))
         .collect();
-    format!(
-        "{head}{}",
-        truncated_tail(lines.len() - MAX_OUTPUT_LINES, "lines")
-    )
+    format!("{head}{}", truncated_tail(lines.len() - max_lines, "lines"))
 }
 
 fn render_diagnostic_raw(d: &Diagnostic) -> String {
@@ -226,7 +220,9 @@ fn render_diagnostic_pretty(d: &Diagnostic) -> String {
 
     let has_exp_act = d.expected.is_some() || d.actual.is_some();
     let has_suggestion = d.suggestion.is_some();
-    for line in d.message.lines().skip(1) {
+    let first_line = d.message.lines().next().unwrap_or("");
+    let inline_body = first_line_body(first_line);
+    for line in inline_body.into_iter().chain(d.message.lines().skip(1)) {
         let trimmed = line.trim();
         let drop_exp_act = has_exp_act
             && (trimmed.starts_with("Expected:")
@@ -284,6 +280,30 @@ fn import_hint(d: &Diagnostic) -> Option<String> {
             None
         }
     })
+}
+
+/// GHC 9.6+ inlines simple diagnostics, e.g.
+/// `<interactive>:1:1: error: [GHC-88464] Variable not in scope: x`.
+/// Extract the body that trails `error:`/`warning:` and an optional `[GHC-NNNNN]`.
+fn first_line_body(line: &str) -> Option<&str> {
+    let after_sev = line
+        .find("error:")
+        .map(|i| &line[i + "error:".len()..])
+        .or_else(|| line.find("warning:").map(|i| &line[i + "warning:".len()..]))?;
+    let rest = after_sev.trim_start();
+    let rest = if let Some(after_bracket) = rest.strip_prefix('[') {
+        match after_bracket.find(']') {
+            Some(close) => after_bracket[close + 1..].trim_start(),
+            None => rest,
+        }
+    } else {
+        rest
+    };
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest)
+    }
 }
 
 fn extract_not_in_scope_name(msg: &str) -> Option<String> {
@@ -467,11 +487,77 @@ fn fuzzy_match(haystack: &str, needle: &str) -> bool {
     true
 }
 
+/// Render output from `:l`/`:r`/`:i`/etc. GHC mixes Haskell-shaped output
+/// (`:browse`, `:info`) with compiler chatter (errors, "[1 of 2] Compiling..."),
+/// so we classify line-by-line and only apply Haskell highlighting to the bits
+/// that actually are Haskell.
 pub fn render_passthrough(output: &str) -> String {
-    output
-        .lines()
-        .map(|line| highlight::highlight_input(line) + "\n")
-        .collect()
+    let mut out = String::new();
+    let mut in_diag: Option<&'static str> = None;
+
+    for line in output.lines() {
+        if let Some(sev) = diag_header_severity(line) {
+            in_diag = Some(sev);
+            out.push_str(&style::severity(sev).paint(line).to_string());
+            out.push('\n');
+            continue;
+        }
+
+        if in_diag.is_some() && (line.is_empty() || line.starts_with(' ') || line.starts_with('\t'))
+        {
+            out.push_str(&style::dim().paint(line).to_string());
+            out.push('\n');
+            continue;
+        }
+        in_diag = None;
+
+        if is_compile_progress(line) {
+            out.push_str(&style::dim().paint(line).to_string());
+            out.push('\n');
+            continue;
+        }
+        if line.starts_with("Failed") {
+            out.push_str(&style::err().paint(line).to_string());
+            out.push('\n');
+            continue;
+        }
+        if line.starts_with("Ok,") || line.starts_with("Ok ") {
+            out.push_str(&style::ok().paint(line).to_string());
+            out.push('\n');
+            continue;
+        }
+
+        out.push_str(&highlight::highlight_input(line));
+        out.push('\n');
+    }
+    out
+}
+
+/// True if `line` looks like a GHC diagnostic header, e.g.
+/// `Foo.hs:5:22: error: [GHC-83865]` or `<interactive>:1:1: warning:`.
+fn diag_header_severity(line: &str) -> Option<&'static str> {
+    let trimmed = line.trim_start();
+    for sev in ["error", "warning"] {
+        let needle = format!("{sev}:");
+        if let Some(idx) = trimmed.find(&needle) {
+            // Header form: starts with severity, OR has "...: " before it
+            // (the ":" rules out "Real type errors" type prose in body lines).
+            let prefix_ok = idx == 0 || trimmed[..idx].trim_end().ends_with(':');
+            if prefix_ok {
+                return Some(if sev == "error" { "error" } else { "warning" });
+            }
+        }
+    }
+    None
+}
+
+fn is_compile_progress(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('[')
+        && trimmed.contains(']')
+        && (trimmed.contains("Compiling")
+            || trimmed.contains("Loading")
+            || trimmed.contains("Linking"))
 }
 
 pub fn render_hoogle_results(results: &[crate::hoogle::HoogleResult]) -> String {
@@ -597,13 +683,17 @@ mod tests {
     fn raw_cfg() -> Config {
         Config {
             pretty_errors: false,
+            pretty_values: false,
             show_timing: false,
+            max_output_lines: 20,
         }
     }
     fn timing_cfg() -> Config {
         Config {
             pretty_errors: true,
+            pretty_values: true,
             show_timing: true,
+            max_output_lines: 20,
         }
     }
 
@@ -661,6 +751,54 @@ mod tests {
         let out = render(&r, &raw_cfg(), None);
         let plain = strip_ansi(&out);
         assert!(plain.contains("Variable not in scope: foo"));
+    }
+
+    #[test]
+    fn test_render_error_inline_body_ghc96() {
+        // GHC 9.6+ collapses simple diagnostics onto a single line.
+        let d = Diagnostic {
+            severity: "error".into(),
+            message: "<interactive>:1:1: error: [GHC-88464] Variable not in scope: x".into(),
+            location: Some(parse::DiagLocation { line: 1, col: 1 }),
+            code: Some("[GHC-88464]".into()),
+            expected: None,
+            actual: None,
+            suggestion: None,
+        };
+        let r = EvalResult {
+            expr: "x".into(),
+            type_str: None,
+            value: "".into(),
+            diagnostics: vec![d],
+        };
+        let out = render(&r, &default_cfg(), None);
+        let plain = strip_ansi(&out);
+        assert!(
+            plain.contains("Variable not in scope: x"),
+            "missing inline body in: {plain}"
+        );
+    }
+
+    #[test]
+    fn test_first_line_body_extracts_inline() {
+        assert_eq!(
+            first_line_body("<interactive>:1:1: error: [GHC-88464] Variable not in scope: x"),
+            Some("Variable not in scope: x")
+        );
+        assert_eq!(
+            first_line_body("Foo.hs:9:22: warning: [GHC-12345] Unused binding"),
+            Some("Unused binding")
+        );
+        assert_eq!(
+            first_line_body("<interactive>:1:1: error: parse error on input 'x'"),
+            Some("parse error on input 'x'")
+        );
+        // Multi-line form: nothing trailing on the header line.
+        assert_eq!(
+            first_line_body("<interactive>:1:1: error: [GHC-88464]"),
+            None
+        );
+        assert_eq!(first_line_body("<interactive>:1:1: error:"), None);
     }
 
     #[test]
@@ -851,5 +989,64 @@ mod tests {
         let d = make_diag("error", "Variable not in scope: myCustomFunc");
         let hint = import_hint(&d);
         assert!(hint.is_none());
+    }
+
+    #[test]
+    fn passthrough_does_not_haskell_highlight_errors() {
+        // GHC compile error from `:l Foo.hs`. Body mentions `type` and `Char`
+        // which the Haskell highlighter would otherwise paint as keyword/type...
+        let raw = "[1 of 1] Compiling Main             ( Foo.hs, interpreted )\n\
+                   Foo.hs:9:22: error: [GHC-83865]\n    \
+                   \u{2022} Couldn't match type \u{2018}[Char]\u{2019} with \u{2018}Int\u{2019}\n      \
+                   Expected: Int\n        \
+                   Actual: [Char]\nFailed, no modules loaded.\n";
+        let out = render_passthrough(raw);
+
+        // Keyword `type` should NOT be wearing the keyword (magenta-bold) prefix
+        let kw_prefix = style::keyword().prefix().to_string();
+        assert!(
+            !out.contains(&kw_prefix),
+            "passthrough error output should not be keyword-highlighted: {out:?}"
+        );
+        // Type-constructor color (cyan) should not appear on `Char`/`Int` either
+        let type_prefix = style::type_con().prefix().to_string();
+        assert!(
+            !out.contains(&type_prefix),
+            "passthrough error output should not be type-highlighted: {out:?}"
+        );
+
+        let plain = strip_ansi(&out);
+        assert!(plain.contains("Couldn't match type"));
+        assert!(plain.contains("[1 of 1] Compiling Main"));
+        assert!(plain.contains("Failed, no modules loaded."));
+    }
+
+    #[test]
+    fn passthrough_still_highlights_haskell_lines() {
+        let raw = "data Maybe a = Nothing | Just a\n";
+        let out = render_passthrough(raw);
+        let kw_prefix = style::keyword().prefix().to_string();
+        assert!(
+            out.contains(&kw_prefix),
+            "passthrough should highlight real Haskell: {out:?}"
+        );
+    }
+
+    #[test]
+    fn diag_header_detects_file_location() {
+        assert_eq!(
+            diag_header_severity("Foo.hs:9:22: error: [GHC-83865]"),
+            Some("error")
+        );
+        assert_eq!(
+            diag_header_severity("<interactive>:1:1: warning:"),
+            Some("warning")
+        );
+        assert_eq!(diag_header_severity("error: something"), Some("error"));
+        assert_eq!(diag_header_severity("    Real error: in body"), None);
+        assert_eq!(
+            diag_header_severity("data Maybe a = Nothing | Just a"),
+            None
+        );
     }
 }
