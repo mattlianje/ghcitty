@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.0] - 2026-04-26
+
+### Added
+- Auto-detect stack/cabal projects, launch via `stack ghci` / `cabal repl`. `--plain` forces bare ghci.
+- `:scratch` — persistent `Scratch.hs`, `:load`s on save.
+- Pretty-printer for `Show` output (records, lists, tuples). Configurable via `pretty_values`, `max_output_lines`.
+- Types shown inline in tab-completion suggestions.
+- Ghcitty commands (`:scratch`, `:edit`, `:undo`, `:doc`, `:hoogle`) in completions and ghost hints.
+- Word-nav keys: Option+Arrow, Cmd+Arrow, Option+Backspace.
+
+### Changed
+- Passthrough output classified line-by-line so compiler chatter isn't highlighted as Haskell.
+- GHC 9.6+ inline diagnostics render with message body on the first line.
+- `:!shell` runs interactively, forwards stdin.
+
+### Fixed
+- `Ctrl+C` aborts the running expression instead of killing ghcitty.
+- `:set prompt` rejected with a message instead of deadlocking.
+- `make install` warns when a stale `ghcitty` shadows the new one on `PATH`.
+
 ## [0.1.0] - 2026-04-16
 
 ### Added
