@@ -76,11 +76,12 @@ const GHCITTY_CMDS: &[&str] = &[
     ":undo",
     ":doc ",
     ":hoogle ",
-    ":gset",
-    ":gset_pretty_errors",
-    ":gset_pretty_print",
-    ":gset_show_timing",
-    ":gset_max_output_lines ",
+    ":config",
+    ":config_pretty_errors",
+    ":config_pretty_print",
+    ":config_show_timing",
+    ":config_max_output_lines ",
+    ":config_max_output_chars ",
 ];
 
 /// Prepend any ghcitty-native commands matching `word` to the GHCi completion

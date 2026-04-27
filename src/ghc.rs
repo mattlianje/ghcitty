@@ -503,6 +503,11 @@ impl GhcProcess {
 
     // Because `:complete repl` prefixes its output w/ a count header
     pub fn complete(&mut self, prefix: &str) -> Result<Vec<String>> {
+        // GHCi parses commands line-by-line, so an embedded newline in the
+        // quoted prefix would terminate `:complete repl` early. Inside a
+        // `:{ :}` block reedline hands us the whole multi-line buffer, so
+        // narrow to the segment after the last newline before quoting.
+        let prefix = prefix.rsplit('\n').next().unwrap_or(prefix);
         let escaped = prefix.replace('\\', "\\\\").replace('"', "\\\"");
         let (raw, _stderr) = self.command(&format!(":complete repl \"{escaped}\""))?;
         let mut completions = Vec::new();

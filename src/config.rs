@@ -8,6 +8,7 @@ pub struct Config {
     pub pretty_print: bool,
     pub show_timing: bool,
     pub max_output_lines: usize,
+    pub max_output_chars: usize,
 }
 
 impl Default for Config {
@@ -16,7 +17,8 @@ impl Default for Config {
             pretty_errors: true,
             pretty_print: true,
             show_timing: false,
-            max_output_lines: 20,
+            max_output_lines: 50,
+            max_output_chars: 3000,
         }
     }
 }
@@ -33,7 +35,8 @@ impl Config {
             pretty_errors: bool_setting(&map, "pretty_errors", true),
             pretty_print: bool_setting(&map, "pretty_print", true),
             show_timing: bool_setting(&map, "show_timing", false),
-            max_output_lines: usize_setting(&map, "max_output_lines", 20),
+            max_output_lines: usize_setting(&map, "max_output_lines", 50),
+            max_output_chars: usize_setting(&map, "max_output_chars", 3000),
         }
     }
 }
@@ -50,6 +53,11 @@ impl Config {
                     .parse()
                     .map_err(|_| format!("expected a number, got '{value}'"))?
             }
+            "max_output_chars" => {
+                self.max_output_chars = value
+                    .parse()
+                    .map_err(|_| format!("expected a number, got '{value}'"))?
+            }
             _ => return Err(format!("unknown setting '{key}'")),
         }
         Ok(())
@@ -61,6 +69,7 @@ impl Config {
             ("pretty_print", self.pretty_print.to_string()),
             ("show_timing", self.show_timing.to_string()),
             ("max_output_lines", self.max_output_lines.to_string()),
+            ("max_output_chars", self.max_output_chars.to_string()),
         ]
     }
 }

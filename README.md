@@ -132,8 +132,8 @@ All GHCi `:` commands pass through. Extras:
 :e OR :edit OR <CTRL> + g  Open $EDITOR, eval on save
 :scratch                   Open a persistent scratch .hs in $EDITOR, :load on save
 :undo <N>                  Undo last <N> expressions
-:gset                      List runtime config
-:gset_<key> [value]        Toggle a bool, or set a value (session-only)
+:config                    List runtime config
+:config_<key> [value]      Toggle a bool, or set a value (session-only)
 ```
 
 ## Config
@@ -143,17 +143,19 @@ All GHCi `:` commands pass through. Extras:
 ```
 pretty_errors = true     # structured error display (default: true)
 pretty_print = true      # pretty-print Show output (default: true)
-max_output_lines = 20    # truncate output past this many lines (default: 20)
+max_output_lines = 50    # truncate output past this many lines (default: 50, 0 disables)
+max_output_chars = 3000  # truncate output past this many chars (default: 3000, 0 disables)
 show_timing = false      # show eval timing (default: false)
 ```
 
-Tweak any of these for the current session with `:gset_<key>`. Bool keys
+Tweak any of these for the current session with `:config_<key>`. Bool keys
 toggle when called with no argument:
 
 ```
-:gset_pretty_print            # flips on/off, prints the new value
-:gset_max_output_lines 50     # set a new cap
-:gset                         # show everything
+:config_pretty_print            # flips on/off, prints the new value
+:config_max_output_lines 200    # raise the cap
+:config_max_output_lines 0      # disable line truncation
+:config                         # show everything
 ```
 
 ## FAQ
@@ -179,7 +181,7 @@ Basically "automatic" multiline uses a pretty simple and reliable heuristic...
 **How does completion work?**<br>
 - `<TAB>` opens a columnar menu using `:complete repl` with full line context, so `:m + Data.Li<Tab>` completes module names.
 - For short candidate lists, the type of each match shows alongside it.
-- Ghcitty's own slash commands (`:scratch`, `:gset_*`, `:edit`, `:undo`, `:doc`, `:hoogle`) appear in completions and ghost hints too.
+- Ghcitty's own slash commands (`:scratch`, `:config_*`, `:edit`, `:undo`, `:doc`, `:hoogle`) appear in completions and ghost hints too.
 - Ghost completions show the top match dimmed after 2+ chars.
 
 **How does the hoogle integration work?**<br>

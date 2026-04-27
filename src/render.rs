@@ -6,8 +6,6 @@ use crate::highlight;
 use crate::parse::{self, Diagnostic, EvalResult};
 use crate::style;
 
-const MAX_OUTPUT_CHARS: usize = 3000;
-
 pub fn render(result: &EvalResult, config: &Config, elapsed: Option<Duration>) -> String {
     if !result.diagnostics.is_empty() {
         return render_diagnostics(&result.diagnostics, config);
@@ -98,9 +96,9 @@ fn render_value_block(result: &EvalResult, config: &Config, elapsed: Option<Dura
         result.value.clone()
     };
     let body = if is_io {
-        render_plain_truncated(&value, config.max_output_lines)
+        render_plain_truncated(&value, config.max_output_lines, config.max_output_chars)
     } else {
-        render_value_truncated(&value, config.max_output_lines)
+        render_value_truncated(&value, config.max_output_lines, config.max_output_chars)
     };
 
     let type_tail = result
@@ -134,54 +132,64 @@ fn format_timing(d: Duration) -> String {
     format!("  {}", style::dim().paint(label))
 }
 
-fn char_truncate(value: &str) -> Option<(&str, usize)> {
-    if value.len() <= MAX_OUTPUT_CHARS {
+fn char_truncate(value: &str, max_chars: usize) -> Option<(&str, usize)> {
+    if max_chars == 0 || value.len() <= max_chars {
         return None;
     }
-    let cut = value[..MAX_OUTPUT_CHARS]
+    let cut = value[..max_chars]
         .rfind(|c: char| c == ',' || c == ' ')
-        .unwrap_or(MAX_OUTPUT_CHARS);
+        .unwrap_or(max_chars);
     Some((&value[..cut], value.len() - cut))
 }
 
-fn truncated_tail(remaining: usize, unit: &str) -> String {
+fn line_truncated_tail(remaining: usize) -> String {
     style::dim()
-        .paint(format!("... ({remaining} more {unit})"))
+        .paint(format!(
+            "... ({remaining} more lines \u{00B7} :config_max_output_lines 0 to show all)"
+        ))
         .to_string()
 }
 
-fn render_value_truncated(value: &str, max_lines: usize) -> String {
-    if let Some((head, remaining)) = char_truncate(value) {
+fn char_truncated_tail(remaining: usize) -> String {
+    style::dim()
+        .paint(format!(
+            "... ({remaining} more chars \u{00B7} :config_max_output_chars 0 to show all)"
+        ))
+        .to_string()
+}
+
+fn render_value_truncated(value: &str, max_lines: usize, max_chars: usize) -> String {
+    if let Some((head, remaining)) = char_truncate(value, max_chars) {
         return format!(
             "{}\n{}",
             highlight::highlight_input(head),
-            truncated_tail(remaining, "chars")
+            char_truncated_tail(remaining)
         );
     }
     let lines: Vec<&str> = value.lines().collect();
-    if lines.len() <= max_lines {
+    if max_lines == 0 || lines.len() <= max_lines {
         return highlight::highlight_input(value);
     }
     let head: String = lines[..max_lines]
         .iter()
         .map(|l| highlight::highlight_input(l) + "\n")
         .collect();
-    format!("{head}{}", truncated_tail(lines.len() - max_lines, "lines"))
+    format!("{head}{}", line_truncated_tail(lines.len() - max_lines))
 }
 
-fn render_plain_truncated(value: &str, max_lines: usize) -> String {
-    if let Some((head, remaining)) = char_truncate(value) {
-        return format!("{head}\n{}", truncated_tail(remaining, "chars"));
+fn render_plain_truncated(value: &str, max_lines: usize, max_chars: usize) -> String {
+    if let Some((head, remaining)) = char_truncate(value, max_chars) {
+        return format!("{head}\n{}", char_truncated_tail(remaining));
     }
     let lines: Vec<&str> = value.lines().collect();
-    if lines.len() <= max_lines {
+    if max_lines == 0 || lines.len() <= max_lines {
         return value.to_string();
     }
     let head: String = lines[..max_lines]
         .iter()
         .map(|l| format!("{l}\n"))
         .collect();
-    format!("{head}{}", truncated_tail(lines.len() - max_lines, "lines"))
+    format!("{head}{}", line_truncated_tail(lines.len() - max_lines))
 }
 
 fn render_diagnostic_raw(d: &Diagnostic) -> String {
@@ -686,6 +694,7 @@ mod tests {
             pretty_print: false,
             show_timing: false,
             max_output_lines: 20,
+            max_output_chars: 3000,
         }
     }
     fn timing_cfg() -> Config {
@@ -694,6 +703,7 @@ mod tests {
             pretty_print: true,
             show_timing: true,
             max_output_lines: 20,
+            max_output_chars: 3000,
         }
     }
 
@@ -954,12 +964,78 @@ mod tests {
             value: long_value,
             diagnostics: vec![],
         };
-        let out = render(&r, &default_cfg(), None);
+        let cfg = Config {
+            max_output_lines: 20,
+            ..Config::default()
+        };
+        let out = render(&r, &cfg, None);
         let plain = strip_ansi(&out);
-        assert!(plain.contains("... (30 more lines)"));
+        assert!(plain.contains("30 more lines"));
+        assert!(plain.contains(":config_max_output_lines"));
         assert!(plain.contains("line 0"));
         assert!(plain.contains("line 19"));
         assert!(!plain.contains("line 20"));
+    }
+
+    #[test]
+    fn test_render_char_truncation() {
+        let long_value = "x".repeat(5000);
+        let r = EvalResult {
+            expr: "big".into(),
+            type_str: Some("String".into()),
+            value: long_value,
+            diagnostics: vec![],
+        };
+        let cfg = Config {
+            max_output_chars: 100,
+            ..Config::default()
+        };
+        let out = render(&r, &cfg, None);
+        let plain = strip_ansi(&out);
+        assert!(plain.contains("more chars"));
+        assert!(plain.contains(":config_max_output_chars"));
+    }
+
+    #[test]
+    fn test_render_char_truncation_disabled_with_zero() {
+        let long_value = "x".repeat(5000);
+        let r = EvalResult {
+            expr: "big".into(),
+            type_str: Some("String".into()),
+            value: long_value,
+            diagnostics: vec![],
+        };
+        let cfg = Config {
+            max_output_chars: 0,
+            max_output_lines: 0,
+            ..Config::default()
+        };
+        let out = render(&r, &cfg, None);
+        let plain = strip_ansi(&out);
+        assert!(!plain.contains("more chars"));
+        assert!(plain.contains(&"x".repeat(5000)));
+    }
+
+    #[test]
+    fn test_render_truncation_disabled_with_zero() {
+        let long_value = (0..200)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let r = EvalResult {
+            expr: "big".into(),
+            type_str: None,
+            value: long_value,
+            diagnostics: vec![],
+        };
+        let cfg = Config {
+            max_output_lines: 0,
+            ..Config::default()
+        };
+        let out = render(&r, &cfg, None);
+        let plain = strip_ansi(&out);
+        assert!(plain.contains("line 199"));
+        assert!(!plain.contains("more lines"));
     }
 
     #[test]

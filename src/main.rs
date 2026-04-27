@@ -181,7 +181,7 @@ fn resolve_launch_mode(plain_flag: bool) -> ghc::LaunchMode {
     ghc::detect_project(&cwd).unwrap_or(ghc::LaunchMode::Plain)
 }
 
-fn gset_list(config: &config::Config, json_mode: bool) {
+fn config_list(config: &config::Config, json_mode: bool) {
     if json_mode {
         let map: serde_json::Map<String, serde_json::Value> = config
             .entries()
@@ -190,24 +190,24 @@ fn gset_list(config: &config::Config, json_mode: bool) {
             .collect();
         println!(
             "{}",
-            serde_json::json!({ "command": ":gset", "config": map })
+            serde_json::json!({ "command": ":config", "config": map })
         );
     } else {
         for (k, v) in config.entries() {
-            eprintln!(":gset_{k} = {}", style::dim().paint(v));
+            eprintln!(":config_{k} = {}", style::dim().paint(v));
         }
     }
 }
 
-/// Dispatch `:gset_<key> [value]`. Bool keys toggle when no value is given;
+/// Dispatch `:config_<key> [value]`. Bool keys toggle when no value is given;
 /// numeric keys require a value (no value prints the current one).
-fn gset_dispatch(expr: &str, config: &mut config::Config, json_mode: bool) {
+fn config_dispatch(expr: &str, config: &mut config::Config, json_mode: bool) {
     let mut tokens = expr.split_whitespace();
     let cmd = tokens.next().unwrap_or("");
-    let key = match cmd.strip_prefix(":gset_") {
+    let key = match cmd.strip_prefix(":config_") {
         Some(k) if !k.is_empty() => k,
         _ => {
-            eprintln!("gset: missing key (try :gset for the list)");
+            eprintln!("config: missing key (try :config for the list)");
             return;
         }
     };
@@ -233,7 +233,7 @@ fn gset_dispatch(expr: &str, config: &mut config::Config, json_mode: bool) {
         (Some(_), Some(v)) => match config.set(key, v) {
             Ok(()) => v.to_string(),
             Err(e) => {
-                eprintln!("gset: {e}");
+                eprintln!("config: {e}");
                 return;
             }
         },
@@ -250,12 +250,12 @@ fn gset_dispatch(expr: &str, config: &mut config::Config, json_mode: bool) {
                     serde_json::json!({"command": cmd, "key": key, "value": v})
                 );
             } else {
-                eprintln!(":gset_{key} = {}", style::dim().paint(v));
+                eprintln!(":config_{key} = {}", style::dim().paint(v));
             }
             return;
         }
         (None, _) => {
-            eprintln!("gset: unknown key '{key}' (try :gset for the list)");
+            eprintln!("config: unknown key '{key}' (try :config for the list)");
             return;
         }
     };
@@ -266,7 +266,7 @@ fn gset_dispatch(expr: &str, config: &mut config::Config, json_mode: bool) {
             serde_json::json!({"command": cmd, "key": key, "value": new_value})
         );
     } else {
-        eprintln!(":gset_{key} = {}", style::dim().paint(new_value));
+        eprintln!(":config_{key} = {}", style::dim().paint(new_value));
     }
 }
 
@@ -279,7 +279,7 @@ enum ConfigKind {
 fn config_kind(key: &str) -> Option<ConfigKind> {
     match key {
         "pretty_errors" | "pretty_print" | "show_timing" => Some(ConfigKind::Bool),
-        "max_output_lines" => Some(ConfigKind::Number),
+        "max_output_lines" | "max_output_chars" => Some(ConfigKind::Number),
         _ => None,
     }
 }
@@ -494,17 +494,17 @@ fn repl(
                 continue;
             }
 
-            // :gset lists current settings. Per-knob commands like
-            // :gset_pretty_print toggle/set individual values. Session-only;
+            // :config lists current settings. Per-knob commands like
+            // :config_pretty_print toggle/set individual values. Session-only;
             // ~/.ghcitty supplies the persisted defaults.
-            if expr == ":gset" {
+            if expr == ":config" {
                 drop(g);
-                gset_list(&config, json_mode);
+                config_list(&config, json_mode);
                 continue;
             }
-            if expr.starts_with(":gset_") {
+            if expr.starts_with(":config_") {
                 drop(g);
-                gset_dispatch(&expr, &mut config, json_mode);
+                config_dispatch(&expr, &mut config, json_mode);
                 continue;
             }
 
