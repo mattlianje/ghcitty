@@ -29,10 +29,7 @@
 - Pretty-printed `Show` output (records, lists, tuples)
 - Hoogle integration
 - Binding explorer
-- `:edit` opens `$EDITOR`, evals on save
-- `:scratch` for a persistent scratch buffer
 - Auto-detect stack/cabal projects
-- Auto-detected multiline
 - Bracketed paste
 - Auto-saved, resumable sessions
 - JSON mode for tooling
@@ -78,13 +75,15 @@ nix profile install github:mattlianje/ghcitty
 ### Cabal / Stack
 
 Run `ghcitty` from a directory containing `stack.yaml`, `cabal.project`, or a `*.cabal` file
-and it launches via `stack ghci` / `cabal repl`, so your project modules are in scope
-automatically. The version banner shows which one (`ghcitty 0.1.0 (GHC 9.6.7, via cabal repl)`).
+and it launches via `stack ghci` / `cabal repl`
+
+The version banner shows which one (`ghcitty 0.1.0 (GHC 9.6.7, via cabal repl)`).
+
 Pass `--plain` to force bare `ghci`.
 
 ```
-ghcitty            # auto-detects: stack ghci / cabal repl / plain ghci
-ghcitty --plain    # always plain ghci
+ghcitty            auto-detects: stack ghci / cabal repl / plain ghci
+ghcitty --plain    always plain ghci
 ```
 
 ## Usage
