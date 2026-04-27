@@ -77,7 +77,10 @@ nix profile install github:mattlianje/ghcitty
 Run `ghcitty` from a directory containing `stack.yaml`, `cabal.project`, or a `*.cabal` file
 and it launches via `stack ghci` / `cabal repl`
 
-The version banner shows which one (`ghcitty 0.1.0 (GHC 9.6.7, via cabal repl)`).
+The version banner shows which one, e.g:
+```
+ghcitty 0.2.0 (GHC 9.6.7, via cabal repl)
+```
 
 Pass `--plain` to force bare `ghci`.
 
