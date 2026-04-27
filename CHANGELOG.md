@@ -5,10 +5,10 @@
 ### Added
 - Auto-detect stack/cabal projects, launch via `stack ghci` / `cabal repl`. `--plain` forces bare ghci.
 - `:scratch` opens a persistent `Scratch.hs`, `:load`s on save.
-- Pretty-printer for `Show` output (records, lists, tuples). Configurable via `pretty_print`, `max_output_lines`.
-- `:config` lists runtime config; `:config_<key>` toggles bools or sets numeric knobs for the session.
+- Pretty-printer for `Show` output (records, lists, tuples)
+- `:config` lists runtime config; `:config_<key>` toggles bools or sets vals
 - Types shown inline in tab-completion suggestions.
-- Ghcitty commands (`:scratch`, `:edit`, `:undo`, `:doc`, `:hoogle`) in completions and ghost hints.
+- Ghcitty commands in completions and ghost hints
 - Word-nav keys: Option+Arrow, Cmd+Arrow, Option+Backspace.
 
 ### Changed
