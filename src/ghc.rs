@@ -184,7 +184,7 @@ impl GhcProcess {
         tee_stderr.store(false, Ordering::Relaxed);
 
         // Set sentinel as the prompt and clear continuation prompt in one batch
-        proc.send_raw(&format!(":set prompt \"{}\\n\"", SENTINEL))?;
+        proc.send_raw(&format!(":set prompt \"\\n{}\\n\"", SENTINEL))?;
         proc.send_raw(":set prompt-cont \"\"")?;
         proc.read_until_sentinel()?; // prompt from :set prompt
         proc.read_until_sentinel()?; // prompt from :set prompt-cont
@@ -213,6 +213,7 @@ impl GhcProcess {
             }
             output.push_str(&line);
         }
+        output.pop(); // remove final newline
         Ok(output)
     }
 
@@ -230,7 +231,7 @@ impl GhcProcess {
             }
             if line.contains(SENTINEL) {
                 return Ok(());
-            }
+            } // Might give an extra newline, but good enough for init streaming output
             eprint!("{line}");
         }
     }
@@ -249,6 +250,7 @@ impl GhcProcess {
             }
             output.push_str(&line);
         }
+        output.pop(); // remove final newline
         Ok(output)
     }
 
