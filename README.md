@@ -78,7 +78,7 @@ Run `ghcitty` from a directory with `stack.yaml`, `cabal.project`, or `*.cabal`
 and it launches via `stack ghci` / `cabal repl`. The banner shows which:
 
 ```
-ghcitty 0.2.0 (GHC 9.6.7, via cabal repl)
+ghcitty 0.3.0 (GHC 9.6.7, via cabal repl)
 ```
 
 Pass `--plain` to force bare `ghci`. Anything after `--` is forwarded
