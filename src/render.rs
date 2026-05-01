@@ -230,7 +230,16 @@ fn render_diagnostic_pretty(d: &Diagnostic) -> String {
     let has_suggestion = d.suggestion.is_some();
     let first_line = d.message.lines().next().unwrap_or("");
     let inline_body = first_line_body(first_line);
-    for line in inline_body.into_iter().chain(d.message.lines().skip(1)) {
+    // Compile diagnostics start with a header line (`<interactive>:1:1: error:`
+    // or the GHC 9.6+ inline form) which we skip, since the severity is already
+    // in `out`. Runtime exceptions (`*** Exception: user error (msg)`) and other
+    // free-form stderr have no header, so the first line is the body (issue #14).
+    let has_header = inline_body.is_some() || diag_header_severity(first_line).is_some();
+    let skip_n = if has_header { 1 } else { 0 };
+    for line in inline_body
+        .into_iter()
+        .chain(d.message.lines().skip(skip_n))
+    {
         let trimmed = line.trim();
         let drop_exp_act = has_exp_act
             && (trimmed.starts_with("Expected:")
@@ -787,6 +796,44 @@ mod tests {
             plain.contains("Variable not in scope: x"),
             "missing inline body in: {plain}"
         );
+    }
+
+    #[test]
+    fn test_render_runtime_exception_pretty_shows_body() {
+        // Issue #14: runtime exceptions arrive as free-form stderr with no
+        // GHC `error:` header; the pretty renderer must still print the body.
+        let d = parse::simple_diagnostic("error", "*** Exception: user error (err msg)".into());
+        let r = EvalResult {
+            expr: "fail \"err msg\"".into(),
+            type_str: None,
+            value: "".into(),
+            diagnostics: vec![d],
+        };
+        let out = render(&r, &default_cfg(), None);
+        let plain = strip_ansi(&out);
+        assert!(
+            plain.contains("*** Exception: user error (err msg)"),
+            "missing exception body in: {plain}"
+        );
+    }
+
+    #[test]
+    fn test_render_runtime_exception_with_callstack_pretty() {
+        let msg = "*** Exception: Prelude.head: empty list\n\
+                   CallStack (from HasCallStack):\n\
+                     error, called at libraries/base/GHC/List.hs:1644:3 in base:GHC.List";
+        let d = parse::simple_diagnostic("error", msg.into());
+        let r = EvalResult {
+            expr: "head []".into(),
+            type_str: None,
+            value: "".into(),
+            diagnostics: vec![d],
+        };
+        let out = render(&r, &default_cfg(), None);
+        let plain = strip_ansi(&out);
+        assert!(plain.contains("*** Exception: Prelude.head: empty list"));
+        assert!(plain.contains("CallStack (from HasCallStack):"));
+        assert!(plain.contains("error, called at"));
     }
 
     #[test]

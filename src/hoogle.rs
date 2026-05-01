@@ -11,10 +11,12 @@ pub struct HoogleResult {
 
 /// CLI first, web API fallback.
 pub fn search(query: &str, count: usize) -> Vec<HoogleResult> {
+    let query = unquote(query);
     search_cli(query, count).unwrap_or_else(|| search_web(query, count).unwrap_or_default())
 }
 
 pub fn doc(name: &str) -> Option<HoogleResult> {
+    let name = unquote(name);
     // Try CLI with --info flag first
     if let Some(result) = doc_cli(name) {
         return Some(result);
@@ -22,6 +24,21 @@ pub fn doc(name: &str) -> Option<HoogleResult> {
     // Fall back to web search, take best match
     let results = search_web(name, 1)?;
     results.into_iter().next()
+}
+
+/// Drop a matched pair of surrounding quotes, so `:hoogle "[a] -> [a]"`
+/// works the same as `:hoogle [a] -> [a]` (issue #26).
+fn unquote(s: &str) -> &str {
+    let s = s.trim();
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' || first == b'\'') && first == last {
+            return s[1..s.len() - 1].trim();
+        }
+    }
+    s
 }
 
 fn search_cli(query: &str, count: usize) -> Option<Vec<HoogleResult>> {
@@ -173,7 +190,7 @@ fn parse_cli_line(line: &str) -> Option<HoogleResult> {
 
 fn search_web(query: &str, count: usize) -> Option<Vec<HoogleResult>> {
     // Use curl to hit Hoogle JSON API (avoids needing an HTTP client dep)
-    let encoded = query.replace(' ', "+");
+    let encoded = percent_encode(query);
     let url = format!(
         "https://hoogle.haskell.org/?mode=json&hoogle={}&start=1&count={}",
         encoded, count
@@ -233,6 +250,23 @@ fn parse_hoogle_json(json: &str) -> Option<Vec<HoogleResult>> {
     Some(results)
 }
 
+/// The hoogle JSON endpoint returns nothing for raw `[`, `]`, `>` etc. in
+/// the query (issue #26). Spaces go to `+`, like a form post; everything
+/// outside the RFC 3986 unreserved set gets `%HH`.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        match b {
+            b' ' => out.push('+'),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 fn strip_html(s: &str) -> String {
     let mut out = String::new();
     let mut in_tag = false;
@@ -289,5 +323,47 @@ mod tests {
             strip_html("<b>sort</b> :: Ord a =&gt; [a]"),
             "sort :: Ord a => [a]"
         );
+    }
+
+    #[test]
+    fn unquote_strips_double_quotes() {
+        // Issue #26: hoogle has to receive `[a] -> [a]`, not `"[a] -> [a]"`.
+        assert_eq!(unquote("\"[a] -> [a]\""), "[a] -> [a]");
+    }
+
+    #[test]
+    fn unquote_strips_single_quotes() {
+        assert_eq!(unquote("'sort'"), "sort");
+    }
+
+    #[test]
+    fn unquote_keeps_unquoted() {
+        assert_eq!(unquote("[a] -> [a]"), "[a] -> [a]");
+        assert_eq!(unquote("sort"), "sort");
+    }
+
+    #[test]
+    fn unquote_keeps_mismatched_quotes() {
+        // Asymmetric quoting isn't a closing pair, leave it alone.
+        assert_eq!(unquote("\"foo'"), "\"foo'");
+        assert_eq!(unquote("\"foo"), "\"foo");
+    }
+
+    #[test]
+    fn percent_encode_type_signature() {
+        // `[a] -> [a]` would silently fail without proper encoding.
+        assert_eq!(percent_encode("[a] -> [a]"), "%5Ba%5D+-%3E+%5Ba%5D");
+    }
+
+    #[test]
+    fn percent_encode_passes_unreserved() {
+        assert_eq!(percent_encode("sort"), "sort");
+        assert_eq!(percent_encode("a.b-c_d~e"), "a.b-c_d~e");
+    }
+
+    #[test]
+    fn percent_encode_handles_special_chars() {
+        // `&` has to be encoded or it'd break out of the query param.
+        assert_eq!(percent_encode("a b&c"), "a+b%26c");
     }
 }

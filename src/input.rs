@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nu_ansi_term::Style;
@@ -208,7 +209,7 @@ impl ReedlineHinter for GhciHinter {
         }
 
         // Try cache first
-        let first = {
+        let (first, ambiguous) = {
             let cache_hit = self.cache.as_ref().and_then(|c| {
                 if c.word_start == word_start
                     && word_start <= c.prefix.len()
@@ -217,7 +218,10 @@ impl ReedlineHinter for GhciHinter {
                 {
                     let cached_word = &c.prefix[c.word_start..];
                     if word.starts_with(cached_word) {
-                        return c.completions.iter().find(|s| s.starts_with(word)).cloned();
+                        let mut matches = c.completions.iter().filter(|s| s.starts_with(word));
+                        let first = matches.next().cloned();
+                        let more = matches.next().is_some();
+                        return first.map(|f| (f, more));
                     }
                 }
                 None
@@ -236,14 +240,16 @@ impl ReedlineHinter for GhciHinter {
                     }
                 };
                 let completions = merge_ghcitty_cmds(word, completions);
-                let first = completions.iter().find(|s| s.starts_with(word)).cloned();
+                let mut matches = completions.iter().filter(|s| s.starts_with(word));
+                let first = matches.next().cloned();
+                let ambiguous = matches.next().is_some();
                 self.cache = Some(HintCache {
                     prefix: prefix.to_string(),
                     word_start,
                     completions,
                 });
                 match first {
-                    Some(f) => f,
+                    Some(f) => (f, ambiguous),
                     None => return String::new(),
                 }
             }
@@ -252,7 +258,12 @@ impl ReedlineHinter for GhciHinter {
         if first.len() > word.len() && first.starts_with(word) {
             let suffix = &first[word.len()..];
             self.current_hint = suffix.to_string();
-            self.style.paint(suffix).to_string()
+            let painted = self.style.paint(suffix).to_string();
+            if ambiguous {
+                format!("{}{}", painted, self.style.paint("…"))
+            } else {
+                painted
+            }
         } else {
             String::new()
         }
@@ -282,16 +293,56 @@ impl ReedlineHinter for GhciHinter {
 
 // ** Highlighter **
 
-pub struct HaskellHighlighter;
+pub struct HaskellHighlighter {
+    /// Set by the validator just before submit; cleared after the next paint.
+    /// Suppresses bracket-match highlighting on the final repaint that
+    /// reedline runs on submit, so the line frozen into scrollback is clean.
+    submitting: Arc<AtomicBool>,
+}
+
+impl HaskellHighlighter {
+    pub fn new(submitting: Arc<AtomicBool>) -> Self {
+        Self { submitting }
+    }
+}
 
 impl ReedlineHighlighter for HaskellHighlighter {
-    fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
+    fn highlight(&self, line: &str, cursor: usize) -> StyledText {
         let mut st = StyledText::new();
         if line.is_empty() {
             return st;
         }
+        let just_submitted = self.submitting.swap(false, Ordering::Relaxed);
+        let mut match_positions: Vec<usize> = match highlight::match_bracket(line, cursor) {
+            Some((src, partner)) if !just_submitted => vec![src, partner],
+            _ => Vec::new(),
+        };
+        match_positions.sort_unstable();
+
+        let mut offset = 0usize;
         for (style, text) in highlight::highlight_styled(line) {
-            st.push((style, text));
+            let seg_len = text.len();
+            let seg_end = offset + seg_len;
+            let mut last_local = 0usize;
+            for &p in &match_positions {
+                if p < offset || p >= seg_end {
+                    continue;
+                }
+                let local = p - offset;
+                if local > last_local {
+                    st.push((style, text[last_local..local].to_string()));
+                }
+                // Brackets are single ASCII bytes, so local+1 is a char boundary.
+                st.push((
+                    crate::style::bracket_match(style),
+                    text[local..local + 1].to_string(),
+                ));
+                last_local = local + 1;
+            }
+            if last_local < seg_len {
+                st.push((style, text[last_local..].to_string()));
+            }
+            offset += seg_len;
         }
         st
     }
@@ -299,13 +350,22 @@ impl ReedlineHighlighter for HaskellHighlighter {
 
 // ** Multiline Validator **
 
-pub struct HaskellValidator;
+pub struct HaskellValidator {
+    submitting: Arc<AtomicBool>,
+}
+
+impl HaskellValidator {
+    pub fn new(submitting: Arc<AtomicBool>) -> Self {
+        Self { submitting }
+    }
+}
 
 impl ReedlineValidator for HaskellValidator {
     fn validate(&self, line: &str) -> ValidationResult {
         if is_incomplete(line) {
             ValidationResult::Incomplete
         } else {
+            self.submitting.store(true, Ordering::Relaxed);
             ValidationResult::Complete
         }
     }

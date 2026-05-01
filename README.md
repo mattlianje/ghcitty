@@ -74,19 +74,20 @@ nix profile install github:mattlianje/ghcitty
 
 ### Cabal / Stack
 
-Run `ghcitty` from a directory containing `stack.yaml`, `cabal.project`, or a `*.cabal` file
-and it launches via `stack ghci` / `cabal repl`
-
-The version banner shows which one, e.g:
-```
-ghcitty 0.2.0 (GHC 9.6.7, via cabal repl)
-```
-
-Pass `--plain` to force bare `ghci`.
+Run `ghcitty` from a directory with `stack.yaml`, `cabal.project`, or `*.cabal`
+and it launches via `stack ghci` / `cabal repl`. The banner shows which:
 
 ```
-ghcitty            auto-detects: stack ghci / cabal repl / plain ghci
-ghcitty --plain    always plain ghci
+ghcitty 0.3.0 (GHC 9.6.7, via cabal repl)
+```
+
+Pass `--plain` to force bare `ghci`. Anything after `--` is forwarded
+verbatim to the underlying invocation uv-style...
+
+```
+ghcitty -- --flag mypkg:dev              # stack ghci --flag mypkg:dev
+ghcitty -- lib:mylib -O0                 # cabal repl lib:mylib -O0
+ghcitty --plain -- -package text         # ghci -package text
 ```
 
 ## Usage
@@ -132,7 +133,7 @@ All GHCi `:` commands pass through. Extras:
 :doc <???>                 Haddock docs for <???> via Hoogle
 :/ OR :/<???>              Show all bindings OR fuzzy search for <???> binding
 :e OR :edit OR <CTRL> + g  Open $EDITOR, eval on save
-:scratch                   Open a persistent scratch .hs in $EDITOR, :load on save
+:scratch                   Open the persistent Scratch.hs in $EDITOR, :load on save (no args)
 :undo <N>                  Undo last <N> expressions
 :config                    List runtime config
 :config_<key> [value]      Toggle a bool, or set a value (session-only)

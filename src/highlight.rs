@@ -48,6 +48,56 @@ struct Span {
     kind: Token,
 }
 
+/// Given a cursor byte position, return both bracket positions to highlight:
+/// the bracket adjacent to the cursor and its matching partner. Returns
+/// `(source, partner)` so callers can style both ends.
+/// Considers cursor-1 first (just-typed case), then cursor itself.
+pub fn match_bracket(line: &str, cursor: usize) -> Option<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let target = if cursor > 0 && cursor <= bytes.len() && is_bracket(bytes[cursor - 1]) {
+        cursor - 1
+    } else if cursor < bytes.len() && is_bracket(bytes[cursor]) {
+        cursor
+    } else {
+        return None;
+    };
+
+    let spans = tokenize(line);
+    let mut stack: Vec<(u8, usize)> = Vec::new();
+    for span in &spans {
+        if span.kind != Token::Paren {
+            continue;
+        }
+        let b = bytes[span.start];
+        match b {
+            b'(' | b'[' | b'{' => stack.push((b, span.start)),
+            b')' | b']' | b'}' => {
+                if let Some(&(open, open_pos)) = stack.last() {
+                    if matches_pair(open, b) {
+                        stack.pop();
+                        if open_pos == target {
+                            return Some((target, span.start));
+                        }
+                        if span.start == target {
+                            return Some((target, open_pos));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_bracket(b: u8) -> bool {
+    matches!(b, b'(' | b')' | b'[' | b']' | b'{' | b'}')
+}
+
+fn matches_pair(open: u8, close: u8) -> bool {
+    matches!((open, close), (b'(', b')') | (b'[', b']') | (b'{', b'}'))
+}
+
 pub fn highlight_input(input: &str) -> String {
     highlight_styled(input)
         .iter()
@@ -457,5 +507,64 @@ mod tests {
         let out = highlight_input("n `mod` 15");
         let stripped = strip_ansi(&out);
         assert_eq!(stripped, "n `mod` 15");
+    }
+
+    #[test]
+    fn test_match_bracket_just_typed_close() {
+        // "map (+1) [1]", cursor right after the inner ')'
+        let line = "map (+1) [1]";
+        let close = line.find(')').unwrap();
+        let open = line.find('(').unwrap();
+        assert_eq!(match_bracket(line, close + 1), Some((close, open)));
+    }
+
+    #[test]
+    fn test_match_bracket_cursor_on_open() {
+        let line = "map (+1) [1]";
+        let open = line.find('(').unwrap();
+        let close = line.find(')').unwrap();
+        assert_eq!(match_bracket(line, open), Some((open, close)));
+    }
+
+    #[test]
+    fn test_match_bracket_nested() {
+        let line = "f (g (h x))";
+        // Cursor right after the outer ')'
+        let last = line.rfind(')').unwrap();
+        let first_open = line.find('(').unwrap();
+        assert_eq!(match_bracket(line, last + 1), Some((last, first_open)));
+    }
+
+    #[test]
+    fn test_match_bracket_ignores_string() {
+        // The '(' inside the string literal must not pair with the real ')'
+        let line = "putStrLn \"(\" ++ show 1)";
+        // Cursor after the closing ')'; no real opening, so None.
+        assert_eq!(match_bracket(line, line.len()), None);
+    }
+
+    #[test]
+    fn test_match_bracket_brackets_and_braces() {
+        let line = "[1, 2] ++ {x}";
+        let open_sq = line.find('[').unwrap();
+        let close_sq = line.find(']').unwrap();
+        assert_eq!(match_bracket(line, close_sq + 1), Some((close_sq, open_sq)));
+        let open_br = line.find('{').unwrap();
+        let close_br = line.find('}').unwrap();
+        assert_eq!(match_bracket(line, open_br), Some((open_br, close_br)));
+    }
+
+    #[test]
+    fn test_match_bracket_unbalanced() {
+        let line = "f (x";
+        // Cursor on '(' but no closing, return None.
+        let open = line.find('(').unwrap();
+        assert_eq!(match_bracket(line, open), None);
+    }
+
+    #[test]
+    fn test_match_bracket_no_bracket_adjacent() {
+        let line = "map f xs";
+        assert_eq!(match_bracket(line, 4), None);
     }
 }

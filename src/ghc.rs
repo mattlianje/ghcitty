@@ -106,8 +106,8 @@ pub struct GhcProcess {
 }
 
 impl GhcProcess {
-    pub fn spawn_with_mode(mode: LaunchMode) -> Result<Self> {
-        let (program, args) = match mode {
+    pub fn spawn_with_mode(mode: LaunchMode, extra: &[String]) -> Result<Self> {
+        let (program, mut args) = match mode {
             LaunchMode::Plain => {
                 let ghci = find_ghci().ok_or_else(|| Error::Ghc("ghci not found".into()))?;
                 (ghci, vec!["-v0".to_string()])
@@ -121,6 +121,7 @@ impl GhcProcess {
                 vec!["repl".into(), "--repl-options=-v0".into()],
             ),
         };
+        args.extend(extra.iter().cloned());
 
         // PTY so GHCi stays in interactive mode
         let (master_fd, slave_fd) = open_pty()?;
@@ -243,8 +244,8 @@ impl GhcProcess {
             if n == 0 {
                 return Err(Error::Ghc("ghci process exited unexpectedly".into()));
             }
-            let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-            if trimmed == SENTINEL {
+            if let Some(prefix) = split_trailing_sentinel(&line) {
+                output.push_str(prefix);
                 break;
             }
             output.push_str(&line);
@@ -309,8 +310,8 @@ impl GhcProcess {
                 if n == 0 {
                     return Err(Error::Ghc("ghci process exited unexpectedly".into()));
                 }
-                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                if trimmed == SENTINEL {
+                if let Some(prefix) = split_trailing_sentinel(&line) {
+                    output.push_str(prefix);
                     let stderr = self.drain_stderr();
                     return Ok((output, stderr, false));
                 }
@@ -336,8 +337,8 @@ impl GhcProcess {
                 if n == 0 {
                     return Err(Error::Ghc("ghci process exited unexpectedly".into()));
                 }
-                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                if trimmed == SENTINEL {
+                if let Some(prefix) = split_trailing_sentinel(&line) {
+                    output.push_str(prefix);
                     let stderr = self.drain_stderr();
                     return Ok((output, stderr, false));
                 }
@@ -360,8 +361,12 @@ impl GhcProcess {
                 if n == 0 {
                     return Err(Error::Ghc("ghci process exited unexpectedly".into()));
                 }
-                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                if trimmed == SENTINEL {
+                if let Some(prefix) = split_trailing_sentinel(&line) {
+                    if !prefix.is_empty() {
+                        print!("{prefix}");
+                        std::io::stdout().flush().ok();
+                        output.push_str(prefix);
+                    }
                     let stderr = self.drain_stderr();
                     return Ok((output, stderr, true));
                 }
@@ -395,8 +400,12 @@ impl GhcProcess {
                 if n == 0 {
                     return Err(Error::Ghc("ghci process exited unexpectedly".into()));
                 }
-                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                if trimmed == SENTINEL {
+                if let Some(prefix) = split_trailing_sentinel(&line) {
+                    if !prefix.is_empty() {
+                        print!("{prefix}");
+                        std::io::stdout().flush().ok();
+                        output.push_str(prefix);
+                    }
                     let stderr = self.drain_stderr();
                     return Ok((output, stderr, true));
                 }
@@ -647,6 +656,15 @@ fn open_pty() -> Result<(i32, i32)> {
     Ok((master, slave))
 }
 
+/// Strip a trailing sentinel off a read line and return what came before.
+/// Output without a trailing newline (e.g. `putStr " "`) makes ghci put the
+/// next prompt on the same line as the output, so the sentinel needs peeling
+/// off the end or it leaks and the next read blocks forever (issue #24).
+fn split_trailing_sentinel(line: &str) -> Option<&str> {
+    let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+    trimmed.strip_suffix(SENTINEL)
+}
+
 fn find_ghci() -> Option<String> {
     if which_exists("ghci") {
         return Some("ghci".into());
@@ -726,5 +744,30 @@ mod tests {
     fn no_project_returns_none() {
         let root = fresh_dir("project-none");
         assert_eq!(detect_project(&root), None);
+    }
+
+    #[test]
+    fn split_sentinel_normal_prompt() {
+        // Sentinel alone on its own line: nothing before it.
+        let line = format!("{SENTINEL}\n");
+        assert_eq!(split_trailing_sentinel(&line), Some(""));
+    }
+
+    #[test]
+    fn split_sentinel_no_trailing_newline() {
+        // Issue #24: `putStr " "` leaves the prompt glued to the output line.
+        let line = format!(" {SENTINEL}\n");
+        assert_eq!(split_trailing_sentinel(&line), Some(" "));
+    }
+
+    #[test]
+    fn split_sentinel_no_match() {
+        assert_eq!(split_trailing_sentinel("just regular output\n"), None);
+    }
+
+    #[test]
+    fn split_sentinel_handles_crlf() {
+        let line = format!("{SENTINEL}\r\n");
+        assert_eq!(split_trailing_sentinel(&line), Some(""));
     }
 }
