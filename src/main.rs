@@ -43,6 +43,10 @@ struct Cli {
 
     #[command(subcommand)]
     command: Option<Cmd>,
+
+    /// Forwarded verbatim to `stack ghci` / `cabal repl` / `ghci` (after `--`).
+    #[arg(last = true)]
+    extra: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -74,7 +78,9 @@ fn run(cli: Cli) -> error::Result<()> {
     });
 
     let mode = resolve_launch_mode(cli.plain);
-    let ghc = Arc::new(Mutex::new(ghc::GhcProcess::spawn_with_mode(mode)?));
+    let ghc = Arc::new(Mutex::new(ghc::GhcProcess::spawn_with_mode(
+        mode, &cli.extra,
+    )?));
     let mut sess = sess_handle.join().unwrap()?;
 
     // Replay
@@ -295,6 +301,44 @@ fn is_set_prompt(expr: &str) -> bool {
     matches!(tokens.next(), Some(arg) if arg == "prompt" || arg.starts_with("prompt-"))
 }
 
+/// Detects `:set editor [VAL]` / `:seti editor [VAL]` and extracts the value.
+/// `Some(None)` is the bare query form, `Some(Some(val))` when a value is given.
+fn parse_set_editor(expr: &str) -> Option<Option<String>> {
+    let mut tokens = expr.split_whitespace();
+    let cmd = tokens.next()?;
+    if cmd != ":set" && cmd != ":seti" {
+        return None;
+    }
+    if tokens.next()? != "editor" {
+        return None;
+    }
+    let rest: Vec<&str> = tokens.collect();
+    if rest.is_empty() {
+        Some(None)
+    } else {
+        Some(Some(rest.join(" ")))
+    }
+}
+
+/// Pick the editor: explicit override first, then $EDITOR, then $VISUAL, then vi.
+fn resolve_editor(override_: Option<&str>) -> String {
+    if let Some(v) = override_ {
+        return v.to_string();
+    }
+    std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".into())
+}
+
+/// Run `program args` with stdio inherited from ghcitty so the child sees a real
+/// TTY (vi/less/htop need this) and ^C goes to it instead of us.
+fn spawn_with_tty(program: &str, args: &[&str]) -> error::Result<std::process::ExitStatus> {
+    std::process::Command::new(program)
+        .args(args)
+        .status()
+        .map_err(|e| error::Error::Ghc(format!("failed to launch {program}: {e}")))
+}
+
 fn dedent(input: &str) -> String {
     let all_lines: Vec<&str> = input.lines().collect();
     let start = all_lines
@@ -354,8 +398,9 @@ fn repl(
         ghc: Arc::clone(&ghc),
     });
     let hinter = Box::new(input::GhciHinter::new(Arc::clone(&ghc)));
-    let highlighter = Box::new(input::HaskellHighlighter);
-    let validator = Box::new(input::HaskellValidator);
+    let submitting = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let highlighter = Box::new(input::HaskellHighlighter::new(Arc::clone(&submitting)));
+    let validator = Box::new(input::HaskellValidator::new(submitting));
 
     let menu = input::completion_menu();
 
@@ -373,6 +418,14 @@ fn repl(
         KeyCode::Char('g'),
         ReedlineEvent::OpenEditor,
     );
+    // ^Z exits ghcitty on an empty line, matching GHCi (issue #17). Raw mode
+    // suppresses SIGTSTP, so we map it to reedline's CtrlD event: same
+    // exit-or-delete-char behavior as ^D.
+    vi_insert.add_binding(
+        KeyModifiers::CONTROL,
+        KeyCode::Char('z'),
+        ReedlineEvent::CtrlD,
+    );
     add_word_nav_bindings(&mut vi_insert);
 
     let mut vi_normal = default_vi_normal_keybindings();
@@ -380,6 +433,11 @@ fn repl(
         KeyModifiers::CONTROL,
         KeyCode::Char('g'),
         ReedlineEvent::OpenEditor,
+    );
+    vi_normal.add_binding(
+        KeyModifiers::CONTROL,
+        KeyCode::Char('z'),
+        ReedlineEvent::CtrlD,
     );
     add_word_nav_bindings(&mut vi_normal);
 
@@ -400,6 +458,10 @@ fn repl(
         .with_highlighter(highlighter)
         .with_validator(validator)
         .with_history(history)
+        // Don't save quit commands to history (issue #19): pressing Up right
+        // after starting ghcitty would otherwise replay `:q` and exit. Covers
+        // `:q` and `:quit`; GHCi has no other `:q*` commands.
+        .with_history_exclusion_prefix(Some(":q".into()))
         .with_menu(ReedlineMenu::EngineCompleter(Box::new(menu)))
         .with_edit_mode(Box::new(Vi::new(vi_insert, vi_normal)))
         .with_buffer_editor(std::process::Command::new(editor_cmd), temp_file)
@@ -407,6 +469,10 @@ fn repl(
         .use_bracketed_paste(true);
 
     let prompt = input::GhciPrompt { json_mode };
+
+    // Set via `:set editor X`. Takes precedence over $EDITOR/$VISUAL when
+    // launching the editor for `:edit FILE`. Session-only, not persisted.
+    let mut editor_override: Option<String> = None;
 
     loop {
         // Auto-reload changed files
@@ -430,6 +496,11 @@ fn repl(
                 break;
             }
         };
+
+        // Flush history each line so abnormal exits (panics, kills, the
+        // exception bug from #14) don't drop what was just typed.
+        // FileBackedHistory only writes on Drop otherwise (issue #16).
+        let _ = line_editor.sync_history();
 
         // Strip :{ ... :} wrapper if present
         let input = if raw_input.trim_start().starts_with(":{") {
@@ -469,6 +540,34 @@ fn repl(
         if expr.starts_with(':') {
             if expr == ":q" || expr == ":quit" {
                 break;
+            }
+
+            // `:set editor X` is intercepted so we can launch the editor
+            // ourselves with a real TTY (issue #15). GHCi never sees it.
+            if let Some(value) = parse_set_editor(&expr) {
+                drop(g);
+                match value {
+                    Some(v) => {
+                        editor_override = Some(v.clone());
+                        if json_mode {
+                            println!("{}", serde_json::json!({"command": expr, "editor": v}));
+                        } else {
+                            eprintln!("{}", style::dim().paint(format!("(editor set to {v})")));
+                        }
+                    }
+                    None => {
+                        let current = resolve_editor(editor_override.as_deref());
+                        if json_mode {
+                            println!(
+                                "{}",
+                                serde_json::json!({"command": expr, "editor": current})
+                            );
+                        } else {
+                            eprintln!("{}", style::dim().paint(format!("(editor = {current})")));
+                        }
+                    }
+                }
+                continue;
             }
 
             // ghcitty drives GHCi via a sentinel prompt; letting the user
@@ -531,6 +630,18 @@ fn repl(
                 }
                 continue;
             }
+            // :scratch takes no args; catch `:scratch foo` here so we hint
+            // at :load instead of falling through to ghci's "Unknown command".
+            if expr.starts_with(":scratch ") {
+                drop(g);
+                let path_hint = session::scratch_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "~/.local/share/ghcitty/Scratch.hs".into());
+                eprintln!(
+                    ":scratch takes no arguments (opens {path_hint}). To load a file, use :load <file>."
+                );
+                continue;
+            }
             if expr == ":scratch" {
                 drop(g);
                 match open_scratch() {
@@ -564,6 +675,36 @@ fn repl(
                 }
                 continue;
             }
+            // `:edit FILE` / `:e FILE`: launch the editor on FILE with real
+            // stdio (so vi/nano see a TTY, issue #15), then `:reload` so GHCi
+            // picks up the change without waiting for the next auto-reload tick.
+            let edit_file = expr
+                .strip_prefix(":edit ")
+                .or_else(|| expr.strip_prefix(":e "))
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if let Some(file) = edit_file {
+                drop(g);
+                let editor = resolve_editor(editor_override.as_deref());
+                match spawn_with_tty(&editor, &[file]) {
+                    Ok(status) if status.success() => {
+                        let mut g = ghc.lock().unwrap();
+                        let output = g.passthrough(":reload")?;
+                        g.snapshot_loaded_modules();
+                        if json_mode {
+                            println!("{}", serde_json::json!({"command": expr, "output": output}));
+                        } else if !output.is_empty() {
+                            print!("{}", render::render_passthrough(&output));
+                        }
+                    }
+                    Ok(status) => {
+                        eprintln!("edit: {editor} exited with {status}");
+                    }
+                    Err(e) => eprintln!("edit: {e}"),
+                }
+                continue;
+            }
+
             if expr == ":edit" || expr == ":e" {
                 drop(g);
                 match open_editor(None) {
@@ -634,11 +775,16 @@ fn repl(
                 continue;
             }
 
-            // Shell commands skip the passthrough renderer: output is shell
-            // text (not Haskell) and may need stdin forwarding for cat/less.
+            // `:! cmd` in interactive mode runs the shell as a direct child of
+            // ghcitty with inherited stdio, so fullscreen TUIs (vi/less/htop)
+            // get a real TTY (issue #15). Auto-reload picks up edited files on
+            // the next loop tick.
+            //
+            // JSON mode keeps the GHCi-routed path: the output has to be
+            // captured as a string, which a TTY-inheriting child can't do.
             if expr.starts_with(":!") {
-                let (stdout, stderr, was_interactive) = g.command_interactive(&expr)?;
                 if json_mode {
+                    let (stdout, stderr, _was_interactive) = g.command_interactive(&expr)?;
                     let mut combined = stdout;
                     if !stderr.is_empty() {
                         if !combined.is_empty() && !combined.ends_with('\n') {
@@ -650,13 +796,19 @@ fn repl(
                         "{}",
                         serde_json::json!({"command": expr, "output": combined})
                     );
-                } else {
-                    if !was_interactive {
-                        print!("{stdout}");
-                    }
-                    if !stderr.is_empty() {
-                        eprintln!("{}", stderr.join("\n"));
-                    }
+                    continue;
+                }
+
+                let cmd_str = expr.strip_prefix(":!").unwrap_or("").trim();
+                if cmd_str.is_empty() {
+                    eprintln!("syntax: :! command [args]");
+                    drop(g);
+                    continue;
+                }
+                drop(g);
+                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+                if let Err(e) = spawn_with_tty(&shell, &["-c", cmd_str]) {
+                    eprintln!(":!: {e}");
                 }
                 continue;
             }
@@ -725,9 +877,7 @@ fn do_undo(
 /// on first use so `:load` succeeds without the user having to type the header.
 /// Returns the path to load if the file has any non-blank content, or None.
 fn open_scratch() -> error::Result<Option<std::path::PathBuf>> {
-    let editor = std::env::var("EDITOR")
-        .or_else(|_| std::env::var("VISUAL"))
-        .unwrap_or_else(|_| "vi".into());
+    let editor = resolve_editor(None);
 
     let path = session::scratch_path()?;
     if !path.exists() {
@@ -762,9 +912,7 @@ module Scratch where
 
 /// Open $EDITOR, return contents on save.
 fn open_editor(seed: Option<&str>) -> error::Result<Option<String>> {
-    let editor = std::env::var("EDITOR")
-        .or_else(|_| std::env::var("VISUAL"))
-        .unwrap_or_else(|_| "vi".into());
+    let editor = resolve_editor(None);
 
     let dir = std::env::temp_dir();
     let path = dir.join("ghcitty-edit.hs");
@@ -819,5 +967,32 @@ mod tests {
         assert!(!is_set_prompt(":load Foo.hs"));
         assert!(!is_set_prompt("prompt = 1"));
         assert!(!is_set_prompt(":show prompt"));
+    }
+
+    #[test]
+    fn set_editor_parsed() {
+        assert_eq!(parse_set_editor(":set editor"), Some(None));
+        assert_eq!(parse_set_editor(":seti editor"), Some(None));
+        assert_eq!(
+            parse_set_editor(":set editor vi"),
+            Some(Some("vi".to_string()))
+        );
+        assert_eq!(
+            parse_set_editor(":seti editor nvim"),
+            Some(Some("nvim".to_string()))
+        );
+        assert_eq!(
+            parse_set_editor(":set editor code -w"),
+            Some(Some("code -w".to_string()))
+        );
+    }
+
+    #[test]
+    fn set_editor_not_matched() {
+        assert_eq!(parse_set_editor(":set prompt"), None);
+        assert_eq!(parse_set_editor(":set"), None);
+        assert_eq!(parse_set_editor(":load Foo.hs"), None);
+        assert_eq!(parse_set_editor(":show editor"), None);
+        assert_eq!(parse_set_editor("editor = vi"), None);
     }
 }

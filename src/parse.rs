@@ -34,9 +34,13 @@ pub struct EvalResult {
 }
 
 pub fn extract_between_sentinels(raw: &str) -> &str {
-    let s = raw.trim();
-    let s = s.strip_prefix(SENTINEL).unwrap_or(s).trim();
-    s.strip_suffix(SENTINEL).unwrap_or(s).trim()
+    // Strip the framing only; no .trim(), or `putStrLn "   "` loses its
+    // spaces (issue #23). Input is `SENTINEL\n<output>SENTINEL`, where
+    // <output> may end without a `\n` if the user used `putStr`.
+    let s = raw.strip_prefix(SENTINEL).unwrap_or(raw);
+    let s = s.strip_prefix('\n').unwrap_or(s);
+    let s = s.strip_suffix(SENTINEL).unwrap_or(s);
+    s.strip_suffix('\n').unwrap_or(s)
 }
 
 pub fn parse_type_output(raw: &str) -> Option<String> {
@@ -307,6 +311,28 @@ mod tests {
     fn test_extract_empty() {
         let raw = format!("{SENTINEL}\n{SENTINEL}");
         assert_eq!(extract_between_sentinels(&raw), "");
+    }
+
+    #[test]
+    fn test_extract_preserves_leading_whitespace() {
+        // Issue #23: putStrLn "       " has to keep its spaces.
+        let raw = format!("{SENTINEL}\n       \n{SENTINEL}");
+        assert_eq!(extract_between_sentinels(&raw), "       ");
+    }
+
+    #[test]
+    fn test_extract_no_trailing_newline() {
+        // Issue #24: putStr " " has no trailing newline before the sentinel.
+        let raw = format!("{SENTINEL}\n {SENTINEL}");
+        assert_eq!(extract_between_sentinels(&raw), " ");
+    }
+
+    #[test]
+    fn test_parse_eval_preserves_whitespace_value() {
+        let raw = format!("{SENTINEL}\n       \n{SENTINEL}");
+        let (val, diags) = parse_eval_output(&raw);
+        assert_eq!(val, "       ");
+        assert!(diags.is_empty());
     }
 
     #[test]
