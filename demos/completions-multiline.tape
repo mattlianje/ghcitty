@@ -12,23 +12,21 @@ Sleep 1.5s
 
 # 1. Tab completion — big list, scroll around, narrow to Data.Char
 Type "import Data."
-Sleep 400ms
-Tab
-Sleep 800ms
-Down
-Down
-Down
-Sleep 400ms
-Up
-Up
-Up
-Sleep 400ms
-Type "Ch"
 Sleep 500ms
 Tab
-Sleep 600ms
+Sleep 1s
+Down
+Sleep 250ms
+Down
+Sleep 250ms
+Down
+Sleep 900ms
+Type "C"
+Sleep 1.1s
 Enter
-Sleep 400ms
+Sleep 500ms
+Enter
+Sleep 600ms
 
 # 2. Ghost hint on module name
 Type "import Data.Li"
@@ -44,8 +42,12 @@ Enter
 Sleep 300ms
 
 Type "      inter"
-Sleep 900ms
-Type "calate"
+Sleep 600ms
+Tab
+Sleep 600ms
+Down
+Sleep 500ms
+Enter
 Sleep 200ms
 Type ' ", " $'
 Enter

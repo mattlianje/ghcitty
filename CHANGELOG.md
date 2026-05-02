@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.0] - 2026-05-01
+
+### Added
+- `ghcitty -- <args>` forwards everything after `--` to `stack ghci` / `cabal repl` / `ghci`.
+- `:edit FILE` / `:e FILE` opens FILE in `$EDITOR`, then `:reload`s.
+- `:set editor X` overrides `$EDITOR`/`$VISUAL` for the session.
+- Bracket matching: vim-style background tint on cursor bracket pairs.
+- Ghost hint shows a trailing `…` when more than one completion matches the prefix.
+- `Ctrl+Z` exits on an empty line, matching GHCi.
+
+### Changed
+- `:!cmd`, `:edit`, `:e`, and `:scratch` run with inherited stdio so vi/less/htop see a real TTY.
+- `:scratch` rejects arguments with a hint to use `:load <file>` instead of falling through to GHCi.
+- History flushed after every line so a panic or kill doesn't drop what was just typed.
+- `:q` / `:quit` no longer saved to history (Up after launch won't replay an exit).
+
+### Fixed
+- `:hoogle "[a] -> [a]"` and `:hoogle [a] -> [a]` both work (matched quotes stripped, query URL-encoded)
+   - This was quite annoying but expressions should work now
+- `putStr " "` and other no-newline output no longer wedge the read loop.
+- `putStrLn "   "` keeps its leading/trailing whitespace in the rendered value.
+- Runtime exceptions (`*** Exception: ...`) render with their body in pretty mode instead of an empty error.
+- Bracket-match tint cleared on submit, so the line frozen into scrollback is plain.
+
 ## [0.2.0] - 2026-04-26
 
 ### Added
