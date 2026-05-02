@@ -16,11 +16,17 @@ Sleep 500ms
 Tab
 Sleep 1s
 Down
-Sleep 250ms
+Sleep 150ms
 Down
-Sleep 250ms
+Sleep 150ms
 Down
-Sleep 900ms
+Sleep 600ms
+Up
+Sleep 150ms
+Up
+Sleep 150ms
+Up
+Sleep 700ms
 Type "C"
 Sleep 1.1s
 Enter
@@ -53,7 +59,9 @@ Type ' ", " $'
 Enter
 Sleep 200ms
 
-Type "        filter (not . null) $"
+Type "        filter (not . null)"
+Sleep 800ms
+Type ' $'
 Enter
 Sleep 200ms
 
@@ -85,8 +93,10 @@ Sleep 300ms
 Enter
 Sleep 1.5s
 
-# 4. Empty string in the list — filter (not . null) earns its keep
+# 4. Empty string in the list — filter (not . null) earns its keep.
+# Cursor sits next to `]`, so the matching `[` lights up.
 Type 'shout ["Arcole", "", "Austerlitz"]'
+Sleep 1.4s
 Enter
 Sleep 1.5s
 
