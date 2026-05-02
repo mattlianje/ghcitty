@@ -144,10 +144,10 @@ All GHCi `:` commands pass through. Extras:
 `~/.ghcitty` (key=value) sets the persisted defaults:
 
 ```
-pretty_errors = true     # structured error display (default: true)
-pretty_print = true      # pretty-print Show output (default: true)
-max_output_lines = 50    # truncate output past this many lines (default: 50, 0 disables)
-max_output_chars = 3000  # truncate output past this many chars (default: 3000, 0 disables)
+pretty_errors = true
+pretty_print = true 
+max_output_lines = 50    # 0 disables
+max_output_chars = 3000  # 0 disable
 show_timing = false      # show eval timing (default: false)
 ```
 
@@ -155,10 +155,11 @@ Tweak any of these for the current session with `:config_<key>`. Bool keys
 toggle when called with no argument:
 
 ```
-:config_pretty_print            # flips on/off, prints the new value
-:config_max_output_lines 200    # raise the cap
-:config_max_output_lines 0      # disable line truncation
-:config                         # show everything
+:config_pretty_print
+:config_max_output_lines 200
+:config_max_output_lines 0
+# Show all options...
+:config
 ```
 
 ## FAQ
