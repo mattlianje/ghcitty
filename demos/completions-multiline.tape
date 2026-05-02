@@ -16,17 +16,17 @@ Sleep 500ms
 Tab
 Sleep 1s
 Down
-Sleep 150ms
+Sleep 80ms
 Down
-Sleep 150ms
+Sleep 80ms
 Down
-Sleep 600ms
+Sleep 400ms
 Up
-Sleep 150ms
+Sleep 80ms
 Up
-Sleep 150ms
+Sleep 80ms
 Up
-Sleep 700ms
+Sleep 500ms
 Type "C"
 Sleep 1.1s
 Enter
@@ -36,9 +36,9 @@ Sleep 600ms
 
 # 2. Ghost hint on module name
 Type "import Data.Li"
-Sleep 900ms
+Sleep 400ms
 Type "st"
-Sleep 300ms
+Sleep 200ms
 Enter
 Sleep 400ms
 
@@ -96,7 +96,7 @@ Sleep 1.5s
 # 4. Empty string in the list — filter (not . null) earns its keep.
 # Cursor sits next to `]`, so the matching `[` lights up.
 Type 'shout ["Arcole", "", "Austerlitz"]'
-Sleep 1.4s
+Sleep 300ms
 Enter
 Sleep 1.5s
 
