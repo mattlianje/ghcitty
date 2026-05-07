@@ -74,15 +74,17 @@ nix profile install github:mattlianje/ghcitty
 
 ### Cabal / Stack
 
-Run `ghcitty` from a directory with `stack.yaml`, `cabal.project`, or `*.cabal`
-and it launches via `stack ghci` / `cabal repl`. The banner shows which:
-
+Run `ghcitty` from a directory with any of
 ```
-ghcitty 0.3.0 (GHC 9.6.7, via cabal repl)
+stack.yml
+cabal.project
+*.cabal
 ```
+and it launches via `stack ghci` or `cabal repl` (the startup banner shows which)
 
-Pass `--plain` to force bare `ghci`. Anything after `--` is forwarded
-verbatim to the underlying invocation uv-style...
+Pass `--plain` to force bare `ghci`
+
+Anything after `--` is forwarded verbatim to the underlying invocation uv-style...
 
 ```
 ghcitty -- --flag mypkg:dev              # stack ghci --flag mypkg:dev
