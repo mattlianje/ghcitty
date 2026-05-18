@@ -14,13 +14,13 @@ Sleep 1.5s
 Type "import Data."
 Sleep 500ms
 Tab
-Sleep 1s
-Down
-Sleep 80ms
-Down
-Sleep 80ms
-Down
 Sleep 400ms
+Down
+Sleep 80ms
+Down
+Sleep 80ms
+Down
+Sleep 200ms
 Up
 Sleep 80ms
 Up
