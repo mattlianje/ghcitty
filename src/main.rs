@@ -466,7 +466,8 @@ fn repl(
         .with_edit_mode(Box::new(Vi::new(vi_insert, vi_normal)))
         .with_buffer_editor(std::process::Command::new(editor_cmd), temp_file)
         .with_quick_completions(true)
-        .use_bracketed_paste(true);
+        .use_bracketed_paste(true)
+        .use_kitty_keyboard_enhancement(true);
 
     let prompt = input::GhciPrompt { json_mode };
 
@@ -475,17 +476,6 @@ fn repl(
     let mut editor_override: Option<String> = None;
 
     loop {
-        // Auto-reload changed files
-        if !json_mode {
-            let mut g = ghc.lock().unwrap();
-            if let Some(output) = g.check_reload() {
-                eprintln!("{}", style::dim().paint("(reloading...)"));
-                if !output.is_empty() {
-                    print!("{}", render::render_passthrough(&output));
-                }
-            }
-        }
-
         let raw_input = match line_editor.read_line(&prompt) {
             Ok(Signal::Success(line)) => line,
             Ok(Signal::CtrlC) => continue,
@@ -517,6 +507,17 @@ fn repl(
         let expr = input.trim().to_string();
         if expr.is_empty() {
             continue;
+        }
+
+        // Auto-reload edited files BEFORE running user command (issue #30)
+        if !json_mode {
+            let mut g = ghc.lock().unwrap();
+            if let Some(output) = g.check_reload() {
+                eprintln!("{}", style::dim().paint("(reloading...)"));
+                if !output.is_empty() {
+                    print!("{}", render::render_passthrough(&output));
+                }
+            }
         }
 
         let mut g = ghc.lock().unwrap();
@@ -599,6 +600,22 @@ fn repl(
             if expr == ":config" {
                 drop(g);
                 config_list(&config, json_mode);
+                continue;
+            }
+            // `:config foo` (space, not underscore) would otherwise fall through
+            // to ghci's generic "unknown command :config". Hint at the
+            // `:config_<key>` form the user likely meant.
+            if let Some(rest) = expr.strip_prefix(":config ") {
+                drop(g);
+                let rest = rest.trim();
+                if rest.is_empty() {
+                    eprintln!(":config takes no arguments (lists current settings).");
+                } else {
+                    let suggestion = format!(":config_{rest}");
+                    eprintln!(
+                        ":config takes no arguments. Did you mean `{suggestion}`? (use `_`, not a space)"
+                    );
+                }
                 continue;
             }
             if expr.starts_with(":config_") {

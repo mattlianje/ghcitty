@@ -147,9 +147,7 @@ fn parse_diagnostic(block: &str) -> Diagnostic {
                     .trim()
                     .to_string(),
             );
-        } else if content.starts_with("Perhaps you meant")
-            || content.starts_with("Did you mean")
-            || content.starts_with("Suggested fix:")
+        } else if content.starts_with("Perhaps you meant") || content.starts_with("Did you mean")
         {
             suggestion = Some(content.to_string());
         }

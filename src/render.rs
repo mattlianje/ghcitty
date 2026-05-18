@@ -7,18 +7,21 @@ use crate::parse::{self, Diagnostic, EvalResult};
 use crate::style;
 
 pub fn render(result: &EvalResult, config: &Config, elapsed: Option<Duration>) -> String {
+    let mut out = String::new();
+
     if !result.diagnostics.is_empty() {
-        return render_diagnostics(&result.diagnostics, config);
+        out.push_str(&render_diagnostics(&result.diagnostics, config));
     }
 
+    // Warnings don't suppress output: a non-empty value or let-binding type
+    // still belongs in the rendering alongside the diagnostics.
     if !result.value.is_empty() {
-        return render_value_block(result, config, elapsed);
-    }
-
-    if parse::is_let_binding(&result.expr) {
+        out.push_str(&render_value_block(result, config, elapsed));
+    } else if parse::is_let_binding(&result.expr) {
         if let Some(ty) = &result.type_str {
             let name = parse::let_bound_name(&result.expr).unwrap_or_default();
-            return format!(
+            let _ = write!(
+                out,
                 "{}{}\n",
                 style::dim().paint(format!("{name} :: {ty}")),
                 timing_suffix(config, elapsed),
@@ -26,7 +29,7 @@ pub fn render(result: &EvalResult, config: &Config, elapsed: Option<Duration>) -
         }
     }
 
-    String::new()
+    out
 }
 
 /// After interactive IO (output was already printed live), return diagnostics + type tail.
@@ -35,40 +38,42 @@ pub fn render_interactive_tail(
     config: &Config,
     elapsed: Option<Duration>,
 ) -> String {
+    let mut out = String::new();
+
     if !result.diagnostics.is_empty() {
-        return render_diagnostics(&result.diagnostics, config);
+        out.push_str(&render_diagnostics(&result.diagnostics, config));
     }
 
     if parse::is_let_binding(&result.expr) {
-        return result
-            .type_str
-            .as_deref()
-            .map(|ty| {
-                let name = parse::let_bound_name(&result.expr).unwrap_or_default();
-                format!(
-                    "{}{}\n",
-                    style::dim().paint(format!("{name} :: {ty}")),
-                    timing_suffix(config, elapsed),
-                )
-            })
-            .unwrap_or_default();
+        if let Some(ty) = result.type_str.as_deref() {
+            let name = parse::let_bound_name(&result.expr).unwrap_or_default();
+            let _ = write!(
+                out,
+                "{}{}\n",
+                style::dim().paint(format!("{name} :: {ty}")),
+                timing_suffix(config, elapsed),
+            );
+        }
+        return out;
     }
 
-    match &result.type_str {
-        Some(ty) if !result.value.is_empty() => {
+    if let Some(ty) = &result.type_str {
+        if !result.value.is_empty() {
             let prefix = if result.value.contains('\n') {
                 "\n  "
             } else {
                 "  "
             };
-            format!(
+            let _ = write!(
+                out,
                 "{}{}\n",
                 style::dim().paint(format!("{prefix}:: {ty}")),
                 timing_suffix(config, elapsed),
-            )
+            );
         }
-        _ => String::new(),
     }
+
+    out
 }
 
 fn render_diagnostics(diags: &[Diagnostic], config: &Config) -> String {
@@ -800,8 +805,6 @@ mod tests {
 
     #[test]
     fn test_render_runtime_exception_pretty_shows_body() {
-        // Issue #14: runtime exceptions arrive as free-form stderr with no
-        // GHC `error:` header; the pretty renderer must still print the body.
         let d = parse::simple_diagnostic("error", "*** Exception: user error (err msg)".into());
         let r = EvalResult {
             expr: "fail \"err msg\"".into(),
@@ -850,7 +853,6 @@ mod tests {
             first_line_body("<interactive>:1:1: error: parse error on input 'x'"),
             Some("parse error on input 'x'")
         );
-        // Multi-line form: nothing trailing on the header line.
         assert_eq!(
             first_line_body("<interactive>:1:1: error: [GHC-88464]"),
             None
@@ -894,6 +896,38 @@ mod tests {
         };
         let out = render(&r, &default_cfg(), None);
         assert!(out.contains(&style::warn().bold().prefix().to_string()));
+    }
+
+    #[test]
+    fn test_render_warning_preserves_value() {
+        let r = EvalResult {
+            expr: "head [1..10]".into(),
+            type_str: Some("Int".into()),
+            value: "1".into(),
+            diagnostics: vec![make_diag("warning", "x-partial: head is partial")],
+        };
+        let out = render(&r, &default_cfg(), None);
+        let plain = strip_ansi(&out);
+        assert!(plain.contains("x-partial"), "warning missing: {plain:?}");
+        assert!(plain.contains('1'), "value missing: {plain:?}");
+        assert!(plain.contains(":: Int"), "type tail missing: {plain:?}");
+    }
+
+    #[test]
+    fn test_render_warning_preserves_let_binding_type() {
+        let r = EvalResult {
+            expr: "h = head lst".into(),
+            type_str: Some("Int".into()),
+            value: "".into(),
+            diagnostics: vec![make_diag("warning", "x-partial: head is partial")],
+        };
+        let out = render(&r, &default_cfg(), None);
+        let plain = strip_ansi(&out);
+        assert!(plain.contains("x-partial"), "warning missing: {plain:?}");
+        assert!(
+            plain.contains("h :: Int"),
+            "let binding type missing: {plain:?}"
+        );
     }
 
     #[test]
@@ -955,6 +989,38 @@ mod tests {
         let plain = strip_ansi(&out);
         assert!(plain.contains("Perhaps you meant"));
         assert!(out.contains(&style::hint().prefix().to_string()));
+    }
+
+    #[test]
+    fn test_render_suggested_fix_appears_before_body() {
+        let raw = "<interactive>:30:16: error: [GHC-68567]\n    \
+                   Illegal type: '1'\n    \
+                   Suggested fix:\n      \
+                   Perhaps you intended to use the 'DataKinds' extension (implied by 'UnliftedDatatypes')\n      \
+                   You may enable this language extension in GHCi with:\n        \
+                   :set -XDataKinds\n";
+        let (_value, diags) = parse::parse_eval_output(&format!(
+            "{sentinel}\n{raw}{sentinel}",
+            sentinel = parse::SENTINEL
+        ));
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got {diags:?}");
+        let r = EvalResult {
+            expr: "Proxy :: Proxy 1".into(),
+            type_str: None,
+            value: "".into(),
+            diagnostics: diags,
+        };
+        let plain = strip_ansi(&render(&r, &default_cfg(), None));
+        let label = plain
+            .find("Suggested fix:")
+            .expect("rendered output should contain 'Suggested fix:'");
+        let body = plain
+            .find(":set -XDataKinds")
+            .expect("rendered output should contain ':set -XDataKinds'");
+        assert!(
+            label < body,
+            "`Suggested fix:` should appear before the fix body. Got:\n{plain}"
+        );
     }
 
     #[test]
