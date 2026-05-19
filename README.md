@@ -195,3 +195,4 @@ It tries the local `hoogle` CLI first, falls back to web API...
 
 **How do sessions work?**<br>
 Every eval is appended to `~/.local/share/ghcitty/<session>.hs`. `--continue` replays on startup.
+
