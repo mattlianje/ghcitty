@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0] - 2026-05-19
+
+### Added
+- Kitty keyboard protocol enabled in the line editor for richer key disambiguation in kitty/wezterm/foot (`Shift+Enter`, `Ctrl+Shift+...` etc. arrive distinctly).
+- `:config foo` (space form) now prints a hint pointing at `:config_foo` instead of falling through to GHCi's "unknown command" error.
+
+### Changed
+- Warnings no longer suppress the value/type tail: `head [1..10]` with an `x-partial` warning still renders `1 :: Int` alongside the warning, and let-bindings still show their inferred type.
+- Auto-reload check runs immediately before executing the submitted expression rather than before `read_line`, so edits made while typing are picked up on submit (#30).
+
+### Fixed
+- GHC `Suggested fix:` diagnostics render with the suggestion body underneath the label instead of dropping it.
+
 ## [0.3.0] - 2026-05-01
 
 ### Added
