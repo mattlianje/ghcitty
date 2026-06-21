@@ -33,6 +33,56 @@ pub struct EvalResult {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// A GHC valid hole fit: an identifier that typechecks in place of a `_`,
+/// with its signature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HoleFit {
+    pub name: String,
+    pub sig: String,
+}
+
+/// Parse the `Valid hole fits include` block of a typed-hole error into
+/// `name :: sig` pairs. Expects `-funclutter-valid-hole-fits` format, one fit
+/// per indented line.
+pub fn parse_hole_fits(text: &str) -> Vec<HoleFit> {
+    let mut fits = Vec::new();
+    let mut in_block = false;
+    for line in text.lines() {
+        if line.contains("Valid hole fits include") {
+            in_block = true;
+            continue;
+        }
+        if !in_block {
+            continue;
+        }
+        let trimmed = line.trim();
+        // A blank line or a fresh error bullet ends the block.
+        if trimmed.is_empty() || trimmed.starts_with('•') {
+            break;
+        }
+        match trimmed.split_once(" :: ") {
+            // `name :: sig`. Check before the end markers so an operator fit
+            // like `(+) :: ...` isn't taken for the suppressed note.
+            Some((name, sig)) if !name.is_empty() => fits.push(HoleFit {
+                name: name.trim().to_string(),
+                sig: sig.trim().to_string(),
+            }),
+            // "(Some hole fits suppressed...)" ends the block.
+            _ if trimmed.starts_with('(') => break,
+            // Continuation of the previous fit's multi-line type: append it.
+            _ => {
+                if let Some(last) = fits.last_mut() {
+                    last.sig.push(' ');
+                    last.sig.push_str(trimmed);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    fits
+}
+
 pub fn extract_between_sentinels(raw: &str) -> &str {
     // Strip the framing only; no .trim(), or `putStrLn "   "` loses its
     // spaces (issue #23). Input is `SENTINEL\n<output>SENTINEL`, where
@@ -287,6 +337,38 @@ pub fn let_bound_name(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_hole_fits_basic() {
+        let text = "\
+<interactive>:3:2: error: [GHC-88464]
+    • Found hole: _ :: Int -> Int
+    • In the expression: (_ :: Int -> Int) 5
+    • Relevant bindings include it :: Int (bound at <interactive>:3:1)
+      Valid hole fits include
+        negate :: forall a. Num a => a -> a
+        id :: forall a. a -> a
+        (Some hole fits suppressed; use -fmax-valid-hole-fits=N or -fno-max-valid-hole-fits)";
+        let fits = parse_hole_fits(text);
+        assert_eq!(fits.len(), 2);
+        assert_eq!(fits[0].name, "negate");
+        assert_eq!(fits[0].sig, "forall a. Num a => a -> a");
+        assert_eq!(fits[1].name, "id");
+    }
+
+    #[test]
+    fn test_parse_hole_fits_none() {
+        let text = "<interactive>:2:5: error: [GHC-88464]\n    • Found hole: _ :: Int -> b\n";
+        assert!(parse_hole_fits(text).is_empty());
+    }
+
+    #[test]
+    fn test_parse_hole_fits_operator() {
+        let text = "      Valid hole fits include\n        (+) :: forall a. Num a => a -> a -> a\n";
+        let fits = parse_hole_fits(text);
+        assert_eq!(fits.len(), 1);
+        assert_eq!(fits[0].name, "(+)");
+    }
 
     #[test]
     fn test_extract_between_sentinels_clean() {

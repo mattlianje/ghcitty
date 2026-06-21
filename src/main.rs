@@ -1,4 +1,7 @@
 mod config;
+mod core;
+mod dbg_input;
+mod debugger;
 mod error;
 mod ghc;
 mod highlight;
@@ -11,7 +14,7 @@ mod render;
 mod session;
 mod style;
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -290,6 +293,50 @@ fn config_kind(key: &str) -> Option<ConfigKind> {
     }
 }
 
+/// Session `let` bindings as top-level decls for the out-of-process `:core`
+/// compile. Strips the `let ` prefix and dedupes by name, latest wins (matching
+/// GHCi shadowing).
+fn session_bindings(sess: &session::Session) -> Vec<String> {
+    let exprs = sess.replay_exprs().unwrap_or_default();
+    let mut out: Vec<(String, String)> = Vec::new();
+    for e in exprs {
+        if !parse::is_let_binding(&e) {
+            continue;
+        }
+        let Some(name) = parse::let_bound_name(&e) else {
+            continue;
+        };
+        let trimmed = e.trim();
+        let decl = trimmed.strip_prefix("let ").unwrap_or(trimmed).to_string();
+        match out.iter().position(|(n, _)| n == &name) {
+            Some(i) => out[i].1 = decl,
+            None => out.push((name, decl)),
+        }
+    }
+    out.into_iter().map(|(_, decl)| decl).collect()
+}
+
+/// Split `:core <expr>` / `:stg <expr>` / `:cmm <expr>` into its dump kind and
+/// the expression. Returns None for any other command.
+fn parse_dump_cmd(expr: &str) -> Option<(core::DumpKind, &str)> {
+    if let Some(rest) = expr.strip_prefix(":core") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            return Some((core::DumpKind::Core, rest));
+        }
+    }
+    if let Some(rest) = expr.strip_prefix(":stg") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            return Some((core::DumpKind::Stg, rest));
+        }
+    }
+    if let Some(rest) = expr.strip_prefix(":cmm") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            return Some((core::DumpKind::Cmm, rest));
+        }
+    }
+    None
+}
+
 /// Detects `:set prompt`, `:set prompt-cont`, `:set prompt-function`, etc.
 /// Also catches `:seti prompt ...` (the GHCi alias for `:set` in interactive mode).
 fn is_set_prompt(expr: &str) -> bool {
@@ -474,6 +521,9 @@ fn repl(
     // Set via `:set editor X`. Takes precedence over $EDITOR/$VISUAL when
     // launching the editor for `:edit FILE`. Session-only, not persisted.
     let mut editor_override: Option<String> = None;
+
+    // Persists across the loop, mainly the source cache for rendering frames.
+    let mut dbg = debugger::DebuggerState::default();
 
     loop {
         let raw_input = match line_editor.read_line(&prompt) {
@@ -792,6 +842,46 @@ fn repl(
                 continue;
             }
 
+            // `:core`/`:stg`/`:cmm`: compile out-of-process with -O2 plus a
+            // dump flag to show optimized output.
+            if let Some((kind, rest)) = parse_dump_cmd(&expr) {
+                let rest = rest.trim().to_string();
+                if rest.is_empty() {
+                    drop(g);
+                    eprintln!(":{} takes an expression, e.g. `:{} sum [1..10]`", kind.label(), kind.label());
+                    continue;
+                }
+                let imports = g.current_imports();
+                drop(g);
+                let bindings = session_bindings(sess);
+                if !json_mode {
+                    eprint!("{}{CR}", style::dim().paint("(compiling with -O2...)"));
+                }
+                match core::dump(kind, &rest, &imports, &bindings, mode) {
+                    Ok(out) => {
+                        if json_mode {
+                            println!(
+                                "{}",
+                                serde_json::json!({"command": expr, "output": render::strip_ansi(&out)})
+                            );
+                        } else {
+                            print!("{CLEAR_LINE}{out}");
+                        }
+                    }
+                    Err(e) => {
+                        if json_mode {
+                            println!(
+                                "{}",
+                                serde_json::json!({"command": expr, "error": e.to_string()})
+                            );
+                        } else {
+                            eprintln!("{CLEAR_LINE}{}", render::render_passthrough(&e.to_string()));
+                        }
+                    }
+                }
+                continue;
+            }
+
             // `:! cmd` in interactive mode runs the shell as a direct child of
             // ghcitty with inherited stdio, so fullscreen TUIs (vi/less/htop)
             // get a real TTY (issue #15). Auto-reload picks up edited files on
@@ -847,7 +937,19 @@ fn repl(
             let (result, was_interactive) = g.eval_interactive(&expr)?;
             let elapsed = t0.elapsed();
             sess.record(&result)?;
-            if json_mode {
+            drop(g);
+
+            // A breakpoint hit prints `Stopped in ...`; show the debugger panel
+            // instead of the raw output.
+            let frame = if json_mode {
+                None
+            } else {
+                debugger::observe(&debugger::strip_location_echo(&result.value))
+            };
+
+            if let Some(frame) = frame {
+                run_debug_loop(&ghc, &mut dbg, frame)?;
+            } else if json_mode {
                 println!("{}", json::to_json(&result));
             } else if was_interactive {
                 print!(
@@ -861,6 +963,53 @@ fn repl(
     }
 
     Ok(())
+}
+
+/// Drive a stopped breakpoint: render the frame, read a key, send the GHCi
+/// command, re-render if it stops again. Returns once a step/continue/abandon
+/// resumes without hitting another breakpoint. A thin front end over GHCi's
+/// own `:step`/`:continue`/`:print`.
+fn run_debug_loop(
+    ghc: &Arc<Mutex<ghc::GhcProcess>>,
+    dbg: &mut debugger::DebuggerState,
+    mut frame: debugger::Frame,
+) -> error::Result<()> {
+    loop {
+        print!("{}", debugger::render_frame(&frame, dbg));
+        std::io::stdout().flush().ok();
+
+        let cmd = match dbg_input::read_dbg_input()? {
+            dbg_input::DbgInput::Command(cmd) => cmd,
+            // Ctrl-C: redraw, stay stopped.
+            dbg_input::DbgInput::Cancel => continue,
+            // Ctrl-D: leave the debugger.
+            dbg_input::DbgInput::Quit => ":abandon".to_string(),
+        };
+
+        let output = {
+            let mut g = ghc.lock().unwrap();
+            g.passthrough(&cmd)?
+        };
+        let cleaned = debugger::strip_location_echo(&output);
+
+        // Stepped or continued into another breakpoint?
+        if let Some(next) = debugger::observe(&cleaned) {
+            frame = next;
+            continue;
+        }
+
+        // No fresh stop. A step/continue/abandon has resumed: print the
+        // result and leave the debugger.
+        let rest = cleaned.trim();
+        if !rest.is_empty() {
+            print!("{}", render::render_passthrough(rest));
+        }
+        if debugger::is_step_or_continue(&cmd) {
+            return Ok(());
+        }
+        // Otherwise (e.g. `:print x`) GHCi is still at the same frame; loop
+        // and re-render.
+    }
 }
 
 /// Undo last `n` expressions by replaying the rest.

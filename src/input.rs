@@ -77,6 +77,9 @@ const GHCITTY_CMDS: &[&str] = &[
     ":undo",
     ":doc ",
     ":hoogle ",
+    ":core ",
+    ":stg ",
+    ":cmm ",
     ":config",
     ":config_pretty_errors",
     ":config_pretty_print",
@@ -125,6 +128,25 @@ impl ReedlineCompleter for GhciCompleter {
         let Ok(mut ghc) = self.ghc.lock() else {
             return vec![];
         };
+
+        if word == "_" {
+            return ghc
+                .hole_fits(line)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|fit| Suggestion {
+                    value: fit.name,
+                    display_override: None,
+                    description: Some(fit.sig),
+                    style: None,
+                    extra: None,
+                    span: Span::new(word_start, pos),
+                    append_whitespace: false,
+                    match_indices: None,
+                })
+                .collect();
+        }
+
         let completions = match ghc.complete(prefix) {
             Ok(c) => c,
             Err(_) => return vec![],
@@ -678,6 +700,29 @@ mod tests {
     #[test]
     fn test_balanced_parens() {
         assert!(!is_incomplete("map (+1) [1,2,3]"));
+    }
+
+    #[test]
+    #[ignore]
+    fn completer_returns_hole_fits() {
+        let ghc = Arc::new(Mutex::new(
+            GhcProcess::spawn_with_mode(crate::ghc::LaunchMode::Plain, &[]).unwrap(),
+        ));
+        let mut completer = GhciCompleter { ghc };
+        // Cursor sits just after the `_` in a complete, constrained expression.
+        let line = "filter _ [1..10::Int]";
+        let pos = line.find('_').unwrap() + 1;
+        let suggestions = completer.complete(line, pos);
+        assert!(
+            suggestions.iter().any(|s| s.value == "even"),
+            "expected `even` fit, got {:?}",
+            suggestions.iter().map(|s| &s.value).collect::<Vec<_>>()
+        );
+        // The fit should replace just the `_`, leaving the rest intact.
+        let s = &suggestions[0];
+        assert_eq!(s.span.start, pos - 1);
+        assert_eq!(s.span.end, pos);
+        assert!(s.description.is_some());
     }
 
     #[test]

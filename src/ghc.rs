@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::error::{Error, Result};
 use crate::parse::{self, EvalResult, SENTINEL};
@@ -189,6 +189,9 @@ impl GhcProcess {
         proc.send_raw(":set prompt-cont \"\"")?;
         proc.read_until_sentinel()?; // prompt from :set prompt
         proc.read_until_sentinel()?; // prompt from :set prompt-cont
+
+        // Tune typed-hole errors for completion: one fit per line.
+        let _ = proc.command(":set -funclutter-valid-hole-fits -fmax-valid-hole-fits=15");
 
         Ok(proc)
     }
@@ -423,6 +426,49 @@ impl GhcProcess {
                 }
             }
         }
+    }
+
+    /// Query GHC for valid hole fits in `line`, which must contain a `_` hole.
+    /// The hole fails to typecheck, so nothing is evaluated or bound.
+    pub fn hole_fits(&mut self, line: &str) -> Result<Vec<parse::HoleFit>> {
+        let (stdout, mut stderr) = self.command(line)?;
+        if stderr.is_empty() {
+            stderr = self.wait_stderr(Duration::from_millis(300));
+        }
+        let mut text = stdout;
+        if !stderr.is_empty() {
+            text.push('\n');
+            text.push_str(&stderr.join("\n"));
+        }
+        Ok(parse::parse_hole_fits(&text))
+    }
+
+    fn wait_stderr(&self, max: Duration) -> Vec<String> {
+        let start = Instant::now();
+        loop {
+            if !self.stderr_lines.lock().unwrap().is_empty() {
+                thread::sleep(Duration::from_millis(20));
+                return self.stderr_lines.lock().unwrap().drain(..).collect();
+            }
+            if start.elapsed() >= max {
+                return Vec::new();
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    pub fn current_imports(&mut self) -> Vec<String> {
+        let Ok((raw, _)) = self.command(":show imports") else {
+            return Vec::new();
+        };
+        raw.lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("import "))
+            .map(|l| match l.find(" --") {
+                Some(idx) => l[..idx].trim_end().to_string(),
+                None => l.to_string(),
+            })
+            .collect()
     }
 
     pub fn type_of(&mut self, expr: &str) -> Result<Option<String>> {
@@ -744,6 +790,20 @@ mod tests {
     fn no_project_returns_none() {
         let root = fresh_dir("project-none");
         assert_eq!(detect_project(&root), None);
+    }
+
+    #[test]
+    #[ignore]
+    fn hole_fits_live() {
+        let mut g = GhcProcess::spawn_with_mode(LaunchMode::Plain, &[]).unwrap();
+        // Run twice: the first hole query is where the stderr race showed up.
+        for _ in 0..2 {
+            let fits = g.hole_fits("filter _ [1..10::Int]").unwrap();
+            assert!(
+                fits.iter().any(|f| f.name == "even"),
+                "expected `even` among fits, got {fits:?}"
+            );
+        }
     }
 
     #[test]

@@ -25,6 +25,8 @@
 - Syntax highlighting
 - Structured errors with expected/actual diffs, auto-import hints, error code links
 - Tab completion with inline types
+- Hole-completion: Tab on a `_` for valid fits with their types
+- Core/STG/Cmm viewer for all expressions
 - Fish-style ghost completions
 - Pretty-printed `Show` output (records, lists, tuples)
 - Hoogle integration
@@ -133,6 +135,9 @@ All GHCi `:` commands pass through. Extras:
 ```
 :hoogle <???>              Search Hoogle for <???>
 :doc <???>                 Haddock docs for <???> via Hoogle
+:core <expr>               Show the optimized (-O2) GHC Core for <expr>
+:stg <expr>                Show the optimized (-O2) STG for <expr>
+:cmm <expr>                Show the optimized (-O2) Cmm (C--) for <expr>
 :/ OR :/<???>              Show all bindings OR fuzzy search for <???> binding
 :e OR :edit OR <CTRL> + g  Open $EDITOR, eval on save
 :scratch                   Open the persistent Scratch.hs in $EDITOR, :load on save (no args)
@@ -189,6 +194,17 @@ Basically "automatic" multiline uses a pretty simple and reliable heuristic...
 - For short candidate lists, the type of each match shows alongside it.
 - Ghcitty's own slash commands (`:scratch`, `:config_*`, `:edit`, `:undo`, `:doc`, `:hoogle`) appear in completions and ghost hints too.
 - Ghost completions show the top match dimmed after 2+ chars.
+
+**How does hole-completion work?**<br>
+- Put a `_` in an expression, cursor on it, and `<TAB>`.
+- ghcitty asks GHC about the hole and offers the valid fits, with signatures, as completions.
+- GHC needs enough context to infer fits, so fill in the rest of the expression first.
+
+**How does the Core/STG/Cmm viewer work?**<br>
+- `:core` / `:stg` / `:cmm` compile the expression out-of-process with `-O2` and a dump flag, since interpreted GHCi can't show optimized output. `:cmm` is the low-level Cmm (C--) handed to codegen.
+- The dump is cleaned up (`-dsuppress-all`) and syntax-highlighted.
+- It reuses your session imports and `let` bindings, so `:core <name>` works for things you defined at the prompt.
+- Only the bindings your expression uses are shown, so unrelated ones don't clutter it.
 
 **How does the hoogle integration work?**<br>
 It tries the local `hoogle` CLI first, falls back to web API...

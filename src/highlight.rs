@@ -152,6 +152,30 @@ fn token_style(kind: Token) -> nu_ansi_term::Style {
     }
 }
 
+/// Whether a command's argument is a Haskell expression to highlight, rather
+/// than a filename, module, path, or flag.
+fn cmd_takes_expr(cmd: &str) -> bool {
+    let name = cmd.trim_start_matches(':').trim_end_matches('!');
+    matches!(
+        name,
+        "type"
+            | "t"
+            | "type-at"
+            | "kind"
+            | "k"
+            | "info"
+            | "i"
+            | "doc"
+            | "print"
+            | "sprint"
+            | "force"
+            | "instances"
+            | "core"
+            | "stg"
+            | "cmm"
+    )
+}
+
 fn tokenize(input: &str) -> Vec<Span> {
     let bytes = input.as_bytes();
     let len = bytes.len();
@@ -263,11 +287,21 @@ fn tokenize(input: &str) -> Vec<Span> {
             while i < len && !bytes[i].is_ascii_whitespace() {
                 i += 1;
             }
+            let takes_expr = cmd_takes_expr(&input[start..i]);
             spans.push(Span {
                 start,
                 end: i,
                 kind: Token::GhciCmd,
             });
+            // Arg is a filename/path/flag, not an expression (`:load Foo.hs`).
+            if !takes_expr && i < len {
+                spans.push(Span {
+                    start: i,
+                    end: len,
+                    kind: Token::Ident,
+                });
+                i = len;
+            }
             continue;
         }
 
@@ -453,6 +487,25 @@ mod tests {
     fn test_ghci_command() {
         let out = highlight_input(":type map");
         assert!(styled_with(&out, style::ghci_cmd(), ":type"));
+    }
+
+    #[test]
+    fn test_ghci_filename_arg_not_highlighted() {
+        // `:open Test.hs`: the filename must not be painted as a type con.
+        let out = highlight_input(":open Test.hs");
+        assert!(styled_with(&out, style::ghci_cmd(), ":open"));
+        assert!(
+            !styled_with(&out, style::type_con(), "Test"),
+            "filename arg should not be type-highlighted: {out:?}"
+        );
+        assert_eq!(strip_ansi(&out), ":open Test.hs");
+    }
+
+    #[test]
+    fn test_ghci_expr_command_still_highlights_arg() {
+        // `:type` takes a Haskell expression, so its arg stays highlighted.
+        let out = highlight_input(":type Just");
+        assert!(styled_with(&out, style::type_con(), "Just"));
     }
 
     #[test]
