@@ -25,7 +25,7 @@
 - Syntax highlighting
 - Structured errors with expected/actual diffs, auto-import hints, error code links
 - Tab completion with inline types
-- Hole-completion: Tab on a `_` for valid fits with their types
+- Typed holes: Tab on a `_` for valid fits with their types
 - Core/STG/Cmm viewer for all expressions
 - Fish-style ghost completions
 - Pretty-printed `Show` output (records, lists, tuples)
@@ -195,7 +195,7 @@ Basically "automatic" multiline uses a pretty simple and reliable heuristic...
 - Ghcitty's own slash commands (`:scratch`, `:config_*`, `:edit`, `:undo`, `:doc`, `:hoogle`) appear in completions and ghost hints too.
 - Ghost completions show the top match dimmed after 2+ chars.
 
-**How does hole-completion work?**<br>
+**How do typed holes work?**<br>
 - Put a `_` in an expression, cursor on it, and `<TAB>`.
 - ghcitty asks GHC about the hole and offers the valid fits, with signatures, as completions.
 - GHC needs enough context to infer fits, so fill in the rest of the expression first.
