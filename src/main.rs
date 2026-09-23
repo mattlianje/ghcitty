@@ -1,7 +1,5 @@
 mod config;
 mod core;
-mod dbg_input;
-mod debugger;
 mod error;
 mod ghc;
 mod highlight;
@@ -14,7 +12,7 @@ mod render;
 mod session;
 mod style;
 
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -522,9 +520,6 @@ fn repl(
     // launching the editor for `:edit FILE`. Session-only, not persisted.
     let mut editor_override: Option<String> = None;
 
-    // Persists across the loop, mainly the source cache for rendering frames.
-    let mut dbg = debugger::DebuggerState::default();
-
     loop {
         let raw_input = match line_editor.read_line(&prompt) {
             Ok(Signal::Success(line)) => line,
@@ -848,7 +843,11 @@ fn repl(
                 let rest = rest.trim().to_string();
                 if rest.is_empty() {
                     drop(g);
-                    eprintln!(":{} takes an expression, e.g. `:{} sum [1..10]`", kind.label(), kind.label());
+                    eprintln!(
+                        ":{} takes an expression, e.g. `:{} sum [1..10]`",
+                        kind.label(),
+                        kind.label()
+                    );
                     continue;
                 }
                 let imports = g.current_imports();
@@ -939,17 +938,7 @@ fn repl(
             sess.record(&result)?;
             drop(g);
 
-            // A breakpoint hit prints `Stopped in ...`; show the debugger panel
-            // instead of the raw output.
-            let frame = if json_mode {
-                None
-            } else {
-                debugger::observe(&debugger::strip_location_echo(&result.value))
-            };
-
-            if let Some(frame) = frame {
-                run_debug_loop(&ghc, &mut dbg, frame)?;
-            } else if json_mode {
+            if json_mode {
                 println!("{}", json::to_json(&result));
             } else if was_interactive {
                 print!(
@@ -963,53 +952,6 @@ fn repl(
     }
 
     Ok(())
-}
-
-/// Drive a stopped breakpoint: render the frame, read a key, send the GHCi
-/// command, re-render if it stops again. Returns once a step/continue/abandon
-/// resumes without hitting another breakpoint. A thin front end over GHCi's
-/// own `:step`/`:continue`/`:print`.
-fn run_debug_loop(
-    ghc: &Arc<Mutex<ghc::GhcProcess>>,
-    dbg: &mut debugger::DebuggerState,
-    mut frame: debugger::Frame,
-) -> error::Result<()> {
-    loop {
-        print!("{}", debugger::render_frame(&frame, dbg));
-        std::io::stdout().flush().ok();
-
-        let cmd = match dbg_input::read_dbg_input()? {
-            dbg_input::DbgInput::Command(cmd) => cmd,
-            // Ctrl-C: redraw, stay stopped.
-            dbg_input::DbgInput::Cancel => continue,
-            // Ctrl-D: leave the debugger.
-            dbg_input::DbgInput::Quit => ":abandon".to_string(),
-        };
-
-        let output = {
-            let mut g = ghc.lock().unwrap();
-            g.passthrough(&cmd)?
-        };
-        let cleaned = debugger::strip_location_echo(&output);
-
-        // Stepped or continued into another breakpoint?
-        if let Some(next) = debugger::observe(&cleaned) {
-            frame = next;
-            continue;
-        }
-
-        // No fresh stop. A step/continue/abandon has resumed: print the
-        // result and leave the debugger.
-        let rest = cleaned.trim();
-        if !rest.is_empty() {
-            print!("{}", render::render_passthrough(rest));
-        }
-        if debugger::is_step_or_continue(&cmd) {
-            return Ok(());
-        }
-        // Otherwise (e.g. `:print x`) GHCi is still at the same frame; loop
-        // and re-render.
-    }
 }
 
 /// Undo last `n` expressions by replaying the rest.

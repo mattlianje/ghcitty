@@ -255,7 +255,11 @@ fn filter_cmm(section: &str) -> String {
     let mut chunks: Vec<Vec<&str>> = Vec::new();
     let mut cur: Vec<&str> = Vec::new();
     for line in section.lines() {
-        if line.trim_start().starts_with("==================== Output Cmm") && !cur.is_empty() {
+        if line
+            .trim_start()
+            .starts_with("==================== Output Cmm")
+            && !cur.is_empty()
+        {
             chunks.push(std::mem::take(&mut cur));
         }
         cur.push(line);
@@ -279,7 +283,9 @@ fn render(section: &str) -> String {
     let mut out = String::new();
     for line in section.lines() {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("====") || trimmed.starts_with("Result size") || trimmed.starts_with("= {")
+        if trimmed.starts_with("====")
+            || trimmed.starts_with("Result size")
+            || trimmed.starts_with("= {")
         {
             out.push_str(&style::dim().paint(line).to_string());
         } else {

@@ -268,7 +268,6 @@ name = "ghcitty"
 version = "0.4.0"
 dependencies = [
  "clap",
- "crossterm",
  "libc",
  "nu-ansi-term",
  "reedline",
