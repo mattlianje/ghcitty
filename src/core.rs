@@ -34,9 +34,10 @@ impl DumpKind {
     }
 }
 
-/// Name we wrap the expression in. No leading underscore: `_name` parses as a
-/// named typed hole, not a binding.
-const BINDING: &str = "ghcittyDump";
+/// Name we wrap the expression in. `it` mirrors GHCi's name for the last
+/// result, so the dump reads as the user's own expression rather than exposing
+/// an internal binding.
+const BINDING: &str = "it";
 
 /// Compile `expr` under `-O2` and return the highlighted dump, or GHC's error
 /// if it doesn't typecheck. `bindings` are the session's `let` definitions,
@@ -98,8 +99,17 @@ fn build_module(expr: &str, imports: &[String], bindings: &[String]) -> String {
         src.push('\n');
     }
     // Session `let` bindings become top-level decls. GHC treats module-level
-    // bindings as mutually recursive, so order doesn't matter.
+    // bindings as mutually recursive, so order doesn't matter. Skip any binding
+    // named `it`: it would clash with the wrapper we emit below.
     for binding in bindings {
+        let binder: String = binding
+            .trim_start()
+            .chars()
+            .take_while(|&c| is_ident_char(c))
+            .collect();
+        if binder == BINDING {
+            continue;
+        }
         src.push_str(binding);
         src.push('\n');
     }
@@ -159,7 +169,7 @@ fn is_ident_char(c: char) -> bool {
 
 /// We splice all session `let` bindings into the temp module, so the dump also
 /// contains unrelated ones. Keep only the banner plus bindings reachable from
-/// `ghcittyDump`. Returns the whole section if the shape is unexpected.
+/// `it`. Returns the whole section if the shape is unexpected.
 fn filter_reachable(section: &str) -> String {
     // Set banner / "Result size" lines aside; group the rest into bindings
     // separated by blank lines.
@@ -168,7 +178,11 @@ fn filter_reachable(section: &str) -> String {
     let mut cur: Vec<&str> = Vec::new();
     for line in section.lines() {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("====") || trimmed.starts_with("Result size") {
+        // `= {terms: ...}` is the continuation of the `Result size` line.
+        if trimmed.starts_with("====")
+            || trimmed.starts_with("Result size")
+            || trimmed.starts_with("= {")
+        {
             if !cur.is_empty() {
                 blocks.push(std::mem::take(&mut cur));
             }
@@ -185,28 +199,37 @@ fn filter_reachable(section: &str) -> String {
         blocks.push(cur);
     }
 
-    // The binder of a block is the first token of its first definition line,
-    // skipping `-- RHS size` comments and `[IdInfo]` annotations.
-    let binder = |block: &[Vec<&str>], i: usize| -> Option<String> {
-        for line in &block[i] {
+    // Binders are the leading tokens of a block's definition lines, skipping
+    // `-- RHS size` comments and `[IdInfo]` annotations. A `Rec { ... }` group
+    // holds several mutually recursive bindings, so one block can define more
+    // than one name; register them all, and skip the `Rec {` / `end Rec }`
+    // markers so they aren't mistaken for binders.
+    let binders = |block: &[&str]| -> Vec<String> {
+        let mut names = Vec::new();
+        for line in block {
             if line.starts_with(char::is_whitespace) {
                 continue;
             }
             let t = line.trim_start();
-            if t.starts_with("--") || t.starts_with('[') {
+            if t.starts_with("--")
+                || t.starts_with('[')
+                || t == "Rec {"
+                || t.starts_with("end Rec")
+                || t == "}"
+            {
                 continue;
             }
             let name: String = t.chars().take_while(|&c| is_ident_char(c)).collect();
             if !name.is_empty() {
-                return Some(name);
+                names.push(name);
             }
         }
-        None
+        names
     };
 
     let mut name_to_idx: HashMap<String, usize> = HashMap::new();
-    for i in 0..blocks.len() {
-        if let Some(name) = binder(&blocks, i) {
+    for (i, block) in blocks.iter().enumerate() {
+        for name in binders(block) {
             name_to_idx.insert(name, i);
         }
     }
@@ -248,7 +271,7 @@ fn filter_reachable(section: &str) -> String {
 }
 
 /// GHC emits one `==== Output Cmm ====` banner per top-level symbol. Keep only
-/// chunks mentioning our wrapper (`ghcittyDump` and floated `ghcittyDump1`..);
+/// chunks mentioning our wrapper (`it` and floated `it1`..);
 /// spliced session bindings get their own `*_closure` symbols and are dropped.
 /// Returns the whole section if nothing matched.
 fn filter_cmm(section: &str) -> String {
@@ -310,7 +333,7 @@ mod tests {
         assert!(src.contains("module GhcittyDump where"));
         assert!(src.contains("import Data.List"));
         assert!(src.contains("y = (\\x -> x + 1) 41"));
-        assert!(src.contains("ghcittyDump ="));
+        assert!(src.contains("it ="));
         assert!(src.contains("    y"));
     }
 
@@ -319,10 +342,10 @@ mod tests {
         let stdout = "[1 of 1] Compiling GhcittyDump\n\
             ==================== Tidy Core ====================\n\
             Result size of Tidy Core = {terms: 1}\n\
-            ghcittyDump = I# 1#\n\n\n";
+            it = I# 1#\n\n\n";
         let section = extract_section(stdout);
         assert!(section.starts_with("===================="));
-        assert!(section.contains("ghcittyDump = I# 1#"));
+        assert!(section.contains("it = I# 1#"));
         assert!(!section.ends_with('\n'));
     }
 
@@ -335,16 +358,42 @@ mod tests {
     fn filter_reachable_drops_unrelated_bindings() {
         let section = "==================== Final STG: ====================\n\
             y = IS! [42#];\n\n\
-            ghcittyDump5 = I#! [2#];\n\n\
-            ghcittyDump1 = :! [ghcittyDump5 []];\n\n\
-            ghcittyDump = :! [ghcittyDump5 ghcittyDump1];";
+            it5 = I#! [2#];\n\n\
+            it1 = :! [it5 []];\n\n\
+            it = :! [it5 it1];";
         let kept = filter_reachable(section);
-        assert!(kept.contains("ghcittyDump ="));
-        assert!(kept.contains("ghcittyDump5 ="));
-        assert!(kept.contains("ghcittyDump1 ="));
+        assert!(kept.contains("it ="));
+        assert!(kept.contains("it5 ="));
+        assert!(kept.contains("it1 ="));
         // The stale `let y` binding isn't referenced, so it's gone.
         assert!(!kept.contains("y = IS!"));
         assert!(kept.starts_with("===================="));
+    }
+
+    #[test]
+    fn filter_reachable_keeps_rec_worker_loop() {
+        // `sum [..]` compiles to a recursive worker inside a `Rec { .. }` group.
+        // The worker's binder is `$wgo3`, not `Rec`, and the wrapper references
+        // it, so the whole loop must survive the filter.
+        let section = "==================== Tidy Core ====================\n\
+            Result size of Tidy Core\n\
+            \x20 = {terms: 27, types: 8, coercions: 0, joins: 0/0}\n\n\
+            Rec {\n\
+            $wgo3\n\
+            \x20 = \\ x ww ->\n\
+            \x20     case x of wild {\n\
+            \x20       __DEFAULT -> $wgo3 (+# wild 1#) (+# ww (*# wild 2#));\n\
+            \x20       100# -> +# ww 200#\n\
+            \x20     }\n\
+            end Rec }\n\n\
+            it = case $wgo3 1# 0# of ww { __DEFAULT -> I# ww }";
+        let kept = filter_reachable(section);
+        assert!(kept.contains("Rec {"), "Rec block dropped: {kept}");
+        assert!(kept.contains("$wgo3"));
+        assert!(kept.contains("+# ww (*# wild 2#)"));
+        assert!(kept.contains("it = case $wgo3"));
+        // The `Result size` continuation stays attached to the header.
+        assert!(kept.contains("= {terms: 27"));
     }
 
     #[test]
@@ -352,10 +401,10 @@ mod tests {
         // `:core y` wraps `y` itself, so the wrapper references it.
         let section = "==================== Final STG: ====================\n\
             y = IS! [42#];\n\n\
-            ghcittyDump = y;";
+            it = y;";
         let kept = filter_reachable(section);
         assert!(kept.contains("y = IS!"));
-        assert!(kept.contains("ghcittyDump = y"));
+        assert!(kept.contains("it = y"));
     }
 
     #[test]
@@ -367,13 +416,13 @@ mod tests {
             \x20        const 42;\n\
             \x20}]\n\n\n\
             ==================== Output Cmm ====================\n\
-            [section \"\"data\" . ghcittyDump_closure\" {\n\
-            \x20    ghcittyDump_closure:\n\
+            [section \"\"data\" . it_closure\" {\n\
+            \x20    it_closure:\n\
             \x20        const I#_con_info;\n\
             \x20        const 2;\n\
             \x20}]";
         let kept = filter_cmm(section);
-        assert!(kept.contains("ghcittyDump_closure"));
+        assert!(kept.contains("it_closure"));
         assert!(!kept.contains("y_closure"));
     }
 

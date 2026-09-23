@@ -113,6 +113,11 @@ Multiline is auto-detected. Up/Down to move between lines, blank line to submit.
 <img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/auto-multiline-nav.gif" width="600">
 
 
+#### Core/STG/Cmm viewer
+`:core` (also `:stg`, `:cmm`) compiles the expression with `-O2` and shows the optimized output. Here the lists fuse away into one tight loop over unboxed `Int#`.
+
+<img src="https://raw.githubusercontent.com/mattlianje/ghcitty/master/demos/core.gif" width="600">
+
 #### Hoogle
 `:hoogle` to search by name or type, `:doc` for Haddock docs.
 
